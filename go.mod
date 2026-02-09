@@ -1,4 +1,4 @@
-module github.com/thomas/troublemaker
+module github.com/thomasf/troublemaker
 
 go 1.25.7
 
