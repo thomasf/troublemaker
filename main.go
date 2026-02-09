@@ -113,7 +113,7 @@ func main() {
 		logger.Err(err).Msg("could not parse flags")
 		os.Exit(1)
 	}
-	logger.Info().Strs("args", fs.Args()).Msg("command line args")
+	logger.Info().Str("command", os.Args[0]).Strs("args", fs.Args()).Msg("command line args")
 
 	if flags.IgnoreSignals {
 		c := make(chan os.Signal, 1)
@@ -147,6 +147,8 @@ func main() {
 			}
 			time.Sleep(d)
 			os.Exit(flags.ExitCode)
+		case "beat":
+			log.Info().Msg("start as beat")
 		default:
 			fmt.Println("unknown subcommand:", fs.Arg(0))
 			os.Exit(1)

@@ -4,4 +4,5 @@ run CGO_ENABLED=0 GOOS=linux go install github.com/thomasf/troublemaker@${VERSIO
 from gcr.io/distroless/static-debian12
 expose 8092
 copy --from=build /go/bin/troublemaker /
+copy --from=build /go/bin/troublemaker /usr/local/bin/aldryn-celery
 entrypoint ["/troublemaker"]
