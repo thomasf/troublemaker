@@ -1,4 +1,4 @@
-module getting-started-with-go
+module github.com/thomas/troublemaker
 
 go 1.25.7
 
