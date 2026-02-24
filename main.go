@@ -47,6 +47,9 @@ type Flags struct {
 	ExitPercent     int
 	ExitCode        int
 	IgnoreSignals   bool
+	CPUloadEnable   bool
+	CPULoadWorkers  int
+	CPULoadDuration time.Duration
 
 	RandSeed1 uint64
 	RandSeed2 uint64
@@ -65,6 +68,9 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.IntVar(&f.ExitCode, "exit.code", 1, "exit code when exiting")
 
 	fs.BoolVar(&f.IgnoreSignals, "signals.ignore", false, "ignore shutdown signals")
+
+	fs.BoolVar(&f.CPUloadEnable, "cpuload.enable", false, "enable cpu load generator")
+	fs.IntVar(&f.CPULoadWorkers, "cpuload.workers", 1, "number of concurrent goroutines, won't go over max")
 
 	fs.Uint64Var(&f.RandSeed1, "rand.seed1", rand.Uint64(), "seed1 for random generator")
 	fs.Uint64Var(&f.RandSeed2, "rand.seed2", rand.Uint64(), "seed2 for random generator")
@@ -192,7 +198,120 @@ func main() {
 		}()
 	}
 
+	if flags.CPUloadEnable {
+		nWorkers := max(1, min(runtime.GOMAXPROCS(0), flags.CPULoadWorkers))
+		logger.Info().Int("workers", nWorkers).Msg("starting cpu load")
+		for range nWorkers {
+			go startCPULoad()
+		}
+	}
+
 	for {
 		time.Sleep(time.Second)
+	}
+}
+
+func startCPULoad() {
+	testID := xid.New()
+	logger := logger.With().Str("cpuload.id", testID.String()).Logger()
+	logger.Info().Msg("load test starts")
+	defer logger.Info().Msg("load test ended")
+
+	const normal = 6 * time.Minute
+	const burst = 30 * time.Second
+	const sleep = 6 * time.Minute
+	const shortSleep = 30 * time.Second
+	const longSleep = 10 * time.Minute
+
+	type Action struct {
+		Percent  int
+		Duration time.Duration
+	}
+
+	tests := []Action{
+		{Duration: burst, Percent: 90},
+		{Duration: shortSleep},
+		{Duration: burst, Percent: 90},
+		{Duration: shortSleep},
+		{Duration: normal, Percent: 10},
+		{Duration: sleep},
+		{Duration: normal, Percent: 20},
+		{Duration: sleep},
+		{Duration: normal, Percent: 30},
+		{Duration: sleep},
+		{Duration: normal, Percent: 40},
+		{Duration: sleep},
+		{Duration: normal, Percent: 50},
+		{Duration: sleep},
+		{Duration: normal, Percent: 60},
+		{Duration: sleep},
+		{Duration: normal, Percent: 70},
+		{Duration: sleep},
+		{Duration: burst, Percent: 90},
+		{Duration: shortSleep},
+		{Duration: burst, Percent: 90},
+		{Duration: sleep},
+		{Duration: normal, Percent: 70},
+		{Duration: normal, Percent: 50},
+		{Duration: normal, Percent: 20},
+		{Duration: shortSleep},
+		{Duration: burst, Percent: 90},
+		{Duration: longSleep},
+		{Duration: burst, Percent: 90},
+		{Duration: longSleep},
+		{Duration: burst, Percent: 90},
+		{Duration: sleep},
+		{Duration: burst, Percent: 50},
+		{Duration: sleep},
+		{Duration: burst, Percent: 80},
+		{Duration: sleep},
+		{Duration: burst, Percent: 70},
+		{Duration: longSleep},
+	}
+
+	// {
+	// 	var sb strings.Builder
+	// 	var cum time.Duration
+	// 	for i, action := range tests {
+	// 		sb.WriteRune('\n')
+	// 		fmt.Fprintf(&sb, "%03d %s ", i, cum.String())
+	// 		if action.Percent == 0 {
+	// 			fmt.Fprintf(&sb, "sleep for %s", action.Duration)
+	// 			continue
+	// 		}
+	// 		sb.WriteString(fmt.Sprintf("use %v%% cpu for %s", action.Percent, action.Duration.String()))
+	// 		cum += action.Duration
+
+	// 	}
+
+	// 	log.Info().Msg("test plan:" + sb.String())
+	// }
+	t0 := time.Now()
+	for i, action := range tests {
+		logger := logger.With().Int("test.#", i).Dur("test.time", time.Now().Sub(t0).Round(100*time.Millisecond)).Logger()
+		if action.Percent == 0 {
+			logger.Info().Msg("Sleep for " + action.Duration.String())
+			time.Sleep(action.Duration)
+			continue
+		}
+		logger.Info().Msg(fmt.Sprintf("generate %v%% load for %s", action.Percent, action.Duration.String()))
+		doBusyWork(action.Duration, action.Percent)
+	}
+}
+
+func doBusyWork(duration time.Duration, percentage int) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	percentage = max(0, min(100, percentage))
+	unitCycle := 100 * time.Millisecond
+	workTime := time.Duration(percentage) * unitCycle / 100
+	sleepTime := unitCycle - workTime
+	endTime := time.Now().Add(duration)
+	for time.Now().Before(endTime) {
+		startWork := time.Now()
+		for time.Since(startWork) < workTime {
+			// consume CPU
+		}
+		time.Sleep(sleepTime)
 	}
 }
