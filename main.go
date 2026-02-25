@@ -21,13 +21,20 @@ import (
 var logger zerolog.Logger
 
 var startTime = time.Now().UTC()
+var t0 = time.Now()
 
 func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339Nano,
 	})
-	logger = log.With().Str("instance", xid.New().String()).Logger()
+
+	logger = log.With().
+		Str("instance", xid.New().String()).
+		Logger().
+		Hook(zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, message string) {
+			e.Str("t", time.Now().Sub(t0).String())
+		}))
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
