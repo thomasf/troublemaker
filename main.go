@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math/rand/v2"
@@ -8,7 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,6 +26,8 @@ var logger zerolog.Logger
 var startTime = time.Now().UTC()
 var t0 = time.Now()
 
+var instanceID = xid.New().String()
+
 func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
@@ -30,36 +35,78 @@ func init() {
 	})
 
 	logger = log.With().
-		Str("instance", xid.New().String()).
+		Str("instance", instanceID).
 		Logger().
 		Hook(zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, message string) {
 			e.Str("t", time.Now().Sub(t0).String())
 		}))
 }
 
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-	logger.Info().Msg("/ requested")
-	fmt.Fprintf(w, "numcpu: %v\n", runtime.NumCPU())
-	fmt.Fprintf(w, "maxprocs: %v\n", runtime.GOMAXPROCS(0))
+func newInfoHandler(flags Flags, effectiveSettings EffectiveSettings) func(w http.ResponseWriter, r *http.Request) {
+	flagsData, err := json.MarshalIndent(flags, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	effectiveSettingsData, err := json.MarshalIndent(effectiveSettings, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	buildInfoStr := ""
+	buildInfo, ok := debug.ReadBuildInfo()
+	if ok {
+		buildInfoStr = buildInfo.String()
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "\nSystem info:")
+		fmt.Fprintf(w, "numcpu: %v\n", runtime.NumCPU())
+		fmt.Fprintf(w, "maxprocs: %v\n", runtime.GOMAXPROCS(0))
+		fmt.Fprintf(w, "instance id: %s\n", instanceID)
+		fmt.Fprintf(w, "time: %s\n", time.Now().Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "uptime %s\n", time.Now().Sub(t0).String())
+
+		fmt.Fprintf(w, "\nBuild info:\n%s\n", buildInfoStr)
+		fmt.Fprintf(w, "\nFlags:\n%s\n", string(flagsData))
+		fmt.Fprintf(w, "\nEffective settings:\n%s", string(effectiveSettingsData))
+	}
+}
+
+func newRootHandler() func(w http.ResponseWriter, r *http.Request) {
+	var version string
+	buildInfo, ok := debug.ReadBuildInfo()
+	if ok {
+		version = buildInfo.Main.Version
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger.Info().Msg("root http handler called")
+		w.Header().Add("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "trouble maker: %s\n", version)
+		fmt.Fprintf(w, "instance id: %s\n", instanceID)
+		fmt.Fprintf(w, "time: %s\n", time.Now().Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "uptime %s\n", time.Now().Sub(t0).String())
+	}
 }
 
 // Flags .
 type Flags struct {
-	WebListen       string
-	WebDelay        time.Duration
-	WebDelayJitter  time.Duration
-	WebEnable       bool
-	ExitAfter       time.Duration
-	ExitAfterJitter time.Duration
-	ExitPercent     int
-	ExitCode        int
-	IgnoreSignals   bool
-	CPUloadEnable   bool
-	CPULoadWorkers  int
-	CPULoadDuration time.Duration
+	WebEnable       bool          `json:"web.enable"`
+	WebListen       string        `json:"web.listen"`
+	WebDelay        time.Duration `json:"web.delay"`
+	WebDelayJitter  time.Duration `json:"web.delay.jitter"`
+	ExitAfter       time.Duration `json:"exit.after"`
+	ExitAfterJitter time.Duration `json:"exit.after.jitter"`
+	ExitPercent     int           `json:"exit.percent"`
+	ExitCode        int           `json:"exit.code"`
+	IgnoreSignals   bool          `json:"ignore.signals"`
+	CPUloadEnable   bool          `json:"cpuload.enable"`
+	CPULoadWorkers  int           `json:"cpuload.workers"`
+	CPULoadDuration time.Duration `json:"cpuload.duration"`
 
-	RandSeed1 uint64
-	RandSeed2 uint64
+	RandSeed1 uint64 `json:"rand.seed1"`
+	RandSeed2 uint64 `json:"rand.seed2"`
 }
 
 func (f *Flags) Register(fs *flag.FlagSet) {
@@ -105,9 +152,9 @@ func (f Flags) EffectiveSettings() EffectiveSettings {
 }
 
 type EffectiveSettings struct {
-	ExitAfter  time.Duration
-	WebDelay   time.Duration
-	ShouldExit bool
+	ExitAfter  time.Duration `json:"exit.after"`
+	WebDelay   time.Duration `json:"web.delay"`
+	ShouldExit bool          `json:"should exit"`
 }
 
 func main() {
@@ -186,7 +233,13 @@ func main() {
 	if flags.WebEnable {
 		go func() {
 			mux := http.NewServeMux()
-			mux.HandleFunc("/", rootHandler)
+			mux.HandleFunc("/", newRootHandler())
+			mux.HandleFunc("/info", newInfoHandler(flags, effectiveSettings))
+
+			mux.HandleFunc("/cpuload", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				startCPULoad()
+			})
 			mux.HandleFunc("/exit/", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				codeStr := r.URL.Query().Get("code")
@@ -218,7 +271,9 @@ func main() {
 	}
 }
 
-func startCPULoad() {
+var startCPULoad = Guard(dostartCPULoad)
+
+func dostartCPULoad() {
 	testID := xid.New()
 	logger := logger.With().Str("cpuload.id", testID.String()).Logger()
 	logger.Info().Msg("load test starts")
@@ -320,5 +375,16 @@ func doBusyWork(duration time.Duration, percentage int) {
 			// consume CPU
 		}
 		time.Sleep(sleepTime)
+	}
+}
+
+func Guard(fn func()) func() {
+	var isRunning atomic.Int32
+	return func() {
+		if !isRunning.CompareAndSwap(0, 1) {
+			return
+		}
+		defer isRunning.Store(0)
+		fn()
 	}
 }
