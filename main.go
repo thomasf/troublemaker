@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -250,6 +251,37 @@ func main() {
 				logger.Info().Msg("exit on http request")
 				os.Exit(int(code))
 			})
+			mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+				flusher, ok := w.(http.Flusher)
+				if !ok {
+					http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+					return
+				}
+				dur := 5 * time.Minute
+				if d, err := time.ParseDuration(r.URL.Query().Get("duration")); err == nil {
+					dur = d
+				}
+				logger.Info().Str("duration", dur.String()).Msg("slow responder started")
+				ctx, cancel := context.WithTimeout(r.Context(), dur)
+				defer cancel()
+				w.Header().Add("Content-Type", "text/plain")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.WriteHeader(http.StatusOK)
+
+				fmt.Fprintf(w, "Will write for %s or until connection is aborted\n\n", dur.String())
+
+				tick := time.Tick(100 * time.Millisecond)
+				for {
+					select {
+					case <-tick:
+						w.Write([]byte(GetSmiley()))
+						flusher.Flush()
+					case <-ctx.Done():
+						logger.Info().Err(ctx.Err()).Msg("slow responder exiting")
+						return
+					}
+				}
+			})
 			time.Sleep(effectiveSettings.WebDelay)
 			logger.Info().Msg("listen")
 			if err := http.ListenAndServe(flags.WebListen, mux); err != nil {
@@ -387,4 +419,14 @@ func Guard(fn func()) func() {
 		defer isRunning.Store(0)
 		fn()
 	}
+}
+
+func GetSmiley() string {
+	const (
+		start = 0x1F600
+		end   = 0x1F637
+		// end   = 0x1F64F
+	)
+	codePoint := rand.IntN(end-start+1) + start
+	return string(rune(codePoint))
 }
