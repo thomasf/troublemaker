@@ -280,6 +280,32 @@ func main() {
 						logger.Info().Err(ctx.Err()).Msg("slow responder exiting")
 						return
 					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			})
+			mux.HandleFunc("/nothing", func(w http.ResponseWriter, r *http.Request) {
+				dur := 5 * time.Minute
+				if d, err := time.ParseDuration(r.URL.Query().Get("duration")); err == nil {
+					dur = d
+				}
+				logger.Info().Str("duration", dur.String()).Msg("nothing responder started")
+				ctx, cancel := context.WithTimeout(r.Context(), dur)
+				defer cancel()
+
+				for {
+					select {
+					case <-ctx.Done():
+						logger.Info().Err(ctx.Err()).Msg("nothing responder exiting")
+						hj, ok := w.(http.Hijacker)
+						if ok {
+							conn, _, err := hj.Hijack()
+							if err == nil {
+								defer conn.Close()
+							}
+						}
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
 				}
 			})
 			time.Sleep(effectiveSettings.WebDelay)
