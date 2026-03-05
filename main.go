@@ -329,9 +329,9 @@ func main() {
 	}
 }
 
-var startCPULoad = Guard(dostartCPULoad)
+var startCPULoad = Guard(doStartCPULoad)
 
-func dostartCPULoad() {
+func doStartCPULoad() {
 	testID := xid.New()
 	logger := logger.With().Str("cpuload.id", testID.String()).Logger()
 	logger.Info().Msg("load test starts")
