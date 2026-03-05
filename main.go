@@ -81,10 +81,10 @@ func newRootHandler() func(w http.ResponseWriter, r *http.Request) {
 		version = buildInfo.Main.Version
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		logger.Info().Msg("root http handler called")
+		logger.Info().Str("user-agent", r.Header.Get("User-Agent")).Msg("root http handler called")
 		w.Header().Add("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "trouble maker: %s\n", version)
+		fmt.Fprintf(w, "troublemaker: %s\n", version)
 		fmt.Fprintf(w, "instance id: %s\n", instanceID)
 		fmt.Fprintf(w, "time: %s\n", time.Now().Format(time.RFC3339Nano))
 		fmt.Fprintf(w, "uptime %s\n", time.Now().Sub(t0).String())
