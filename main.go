@@ -37,8 +37,10 @@ const (
 
 var logger zerolog.Logger
 
-var startTime = time.Now().UTC()
-var t0 = time.Now()
+var (
+	startTime = time.Now().UTC()
+	t0        = time.Now()
+)
 
 var instanceID = xid.New().String()
 
@@ -306,7 +308,6 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 
 	fs.Uint64Var(&f.RandSeed1, "rand.seed1", rand.Uint64(), "seed1 for random generator")
 	fs.Uint64Var(&f.RandSeed2, "rand.seed2", rand.Uint64(), "seed2 for random generator")
-
 }
 
 func (f Flags) EffectiveSettings() EffectiveSettings {
@@ -326,7 +327,6 @@ func (f Flags) EffectiveSettings() EffectiveSettings {
 		WebDelay:   effectiveDuration(f.WebDelay, f.WebDelayJitter),
 		ShouldExit: f.ExitAfter > 0 && (f.ExitPercent == 100 || float64(f.ExitPercent)/100 >= r.Float64()),
 	}
-
 }
 
 type EffectiveSettings struct {
@@ -336,7 +336,6 @@ type EffectiveSettings struct {
 }
 
 func main() {
-
 	logger.Info().Time("t0", startTime).Msg("started")
 	var flags Flags
 
@@ -404,12 +403,10 @@ func main() {
 	}
 
 	if effectiveSettings.ShouldExit {
-
 		if effectiveSettings.ExitAfter == time.Nanosecond {
 			logger.Info().Msg("exit at startup")
 			os.Exit(flags.ExitCode)
 		} else {
-
 			go func() {
 				time.Sleep(effectiveSettings.ExitAfter)
 				logger.Info().Msg("exit after sleep")
@@ -467,7 +464,7 @@ func main() {
 				w.WriteHeader(http.StatusOK)
 
 				fmt.Fprintf(w, "Will write for %s or until connection is aborted\n\n",
-                    dur.String())
+					dur.String())
 				if err := rc.Flush(); err != nil {
 					logger.Err(err).Msg("slow responder flush error")
 					if errors.Is(err, http.ErrNotSupported) {
@@ -552,13 +549,10 @@ func main() {
 
 	if flags.MemloadEnable {
 		go func() {
-			if flags.MemloadWait > 0 {
-				time.Sleep(flags.MemloadWait)
-			}
+			time.Sleep(flags.MemloadWait)
 			startMemLoad()
 		}()
 	}
-
 	for {
 		time.Sleep(time.Second)
 	}
@@ -730,9 +724,11 @@ func Guard(fn func()) func() {
 	}
 }
 
-var startCPULoad = Guard(doStartCPULoad)
-var startMemLoad = Guard(doStartMemLoad)
-var startCombinedLoad = Guard(doStartCombinedLoad)
+var (
+	startCPULoad      = Guard(doStartCPULoad)
+	startMemLoad      = Guard(doStartMemLoad)
+	startCombinedLoad = Guard(doStartCombinedLoad)
+)
 
 func GetSmiley() string {
 	const (
