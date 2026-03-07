@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -91,6 +94,48 @@ func newRootHandler() func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+//go:embed docs.html
+var docsData []byte
+
+func newDocsHandler(flags Flags, effective EffectiveSettings, usage string) func(w http.ResponseWriter, r *http.Request) {
+	flagsData, _ := json.MarshalIndent(flags, "", "  ")
+	effectiveData, _ := json.MarshalIndent(effective, "", "  ")
+
+	buildInfoStr := ""
+	buildInfo, ok := debug.ReadBuildInfo()
+	if ok {
+		buildInfoStr = buildInfo.String()
+	}
+
+	tmpl, err := template.New("docs").Parse(string(docsData))
+	if err != nil {
+		panic(err)
+	}
+
+	var buf bytes.Buffer
+	data := struct {
+		Flags             string
+		EffectiveSettings string
+		Usage             string
+		BuildInfo         string
+	}{
+		Flags:             string(flagsData),
+		EffectiveSettings: string(effectiveData),
+		Usage:             usage,
+		BuildInfo:         buildInfoStr,
+	}
+	if err := tmpl.Execute(&buf, data); err != nil {
+		panic(err)
+	}
+	renderedDocs := buf.Bytes()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write(renderedDocs)
+	}
+}
+
 // Flags .
 type Flags struct {
 	WebEnable       bool          `json:"web.enable"`
@@ -166,6 +211,11 @@ func main() {
 	fs := flag.NewFlagSet("troublemaker", flag.ContinueOnError)
 	flags.Register(fs)
 
+	var usageBuf bytes.Buffer
+	fs.SetOutput(&usageBuf)
+	fs.Usage()
+	usage := usageBuf.String()
+
 	if err := ff.Parse(fs, os.Args[1:],
 		ff.WithEnvVarNoPrefix(),
 		ff.WithConfigFileFlag("config"),
@@ -235,6 +285,7 @@ func main() {
 		go func() {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", newRootHandler())
+			mux.HandleFunc("/docs", newDocsHandler(flags, effectiveSettings, usage))
 			mux.HandleFunc("/info", newInfoHandler(flags, effectiveSettings))
 
 			mux.HandleFunc("/cpuload", func(w http.ResponseWriter, r *http.Request) {

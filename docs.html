@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Troublemaker API Reference</title>
+    <style>
+      body { font-family: -apple-system, sans-serif; line-height: 1.6; max-width: 900px; margin: 40px auto; padding: 20px; color: #222; background: #fff; }
+      h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+      .endpoint { margin-bottom: 40px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+      .endpoint:hover { border-color: #aaa; }
+      .url-line { font-family: "SFMono-Regular", Consolas, monospace; font-size: 1.2em; font-weight: bold; color: #d63384; display: block; margin-bottom: 8px; }
+      .url-line a { text-decoration: none; color: inherit; }
+      .url-line a:hover { text-decoration: underline; }
+      .doc-section { margin: 10px 0; font-size: 0.95em; color: #444; }
+      .params-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; }
+      .params-table th, .params-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+      .params-table th { color: #888; text-transform: uppercase; font-size: 0.75em; }
+      .toolbox { margin-top: 15px; padding-top: 15px; border-top: 1px dashed #ccc; display: flex; align-items: center; gap: 10px; }
+      input { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; width: 100px; }
+      button { padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+      button:hover { background: #0056b3; }
+      button.danger { background: #dc3545; }
+    </style>
+  </head>
+  <body>
+
+    <h1>Troublemaker</h1>
+    <p>Everything is not always ok</p>
+
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/info">/info</a></span>
+      <div class="doc-section">
+        Returns plain text diagnostic data including <code>GOMAXPROCS</code>, <code>NumCPU</code>, and <code>Build Settings</code>.
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/slow">/slow</a></span>
+      <div class="doc-section">
+        Streams a random emoji every 100ms. Used to test if the load balancer/proxy supports <strong>Response Streaming</strong> and <code>Chunked Transfer Encoding</code>.
+        <table class="params-table">
+          <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>How long to keep the stream open (e.g., <code>10s</code>, <code>2m</code>).</td></tr>
+        </table>
+      </div>
+      <div class="toolbox">
+        <input type="text" id="slowVal" value="15s" placeholder="10s">
+        <button onclick="run('/slow?duration=' + v('slowVal'))">Open Stream</button>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/nothing">/nothing</a></span>
+      <div class="doc-section">
+        Opens a TCP connection but sends <strong>nothing</strong> (no headers, no body). Used to trigger <code>ReadTimeout</code> or <code>Gateway Timeout</code> on proxies.
+        <table class="params-table">
+          <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>Time to stall before hijacking and closing the connection.</td></tr>
+        </table>
+      </div>
+      <div class="toolbox">
+        <input type="text" id="nothingVal" value="30s">
+        <button onclick="run('/nothing?duration=' + v('nothingVal'))">Start Stall</button>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/exit/">/exit/[code]</a></span>
+      <div class="doc-section">
+        Immediately terminates the Go process. Essential for testing <strong>Container Restarts</strong> and <strong>High Availability</strong> failover.
+        <table class="params-table">
+          <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>code</code></td><td>Integer</td><td>1</td><td>The OS exit status code (0-127).</td></tr>
+        </table>
+      </div>
+      <div class="toolbox">
+        <input type="number" id="exitVal" value="1">
+        <button class="danger" onclick="run('/exit/' + v('exitVal'))">Terminate Server</button>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <h2>Build Info &amp; Dependencies</h2>
+      <div class="doc-section">
+        <pre>{{.BuildInfo}}</pre>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <h2>Configuration</h2>
+      <div class="doc-section">
+        <h3>Flag Help</h3>
+        <pre>{{.Usage}}</pre>
+      </div>
+      <div class="doc-section">
+        <h3>Current Flags</h3>
+        <pre>{{.Flags}}</pre>
+      </div>
+      <div class="doc-section">
+        <h3>Effective Settings</h3>
+        <pre>{{.EffectiveSettings}}</pre>
+      </div>
+    </div>
+
+    <script>
+      const v = (id) => document.getElementById(id).value;
+      const run = (url) => window.location.href = url;
+    </script>
+
+  </body>
+</html>
