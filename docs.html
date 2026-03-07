@@ -46,15 +46,17 @@
     <div class="endpoint">
       <span class="url-line"><a href="/slow">/slow</a></span>
       <div class="doc-section">
-        Streams a random emoji every 100ms.
+        Streams a random emoji at a specified interval.
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
           <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>How long to keep the stream open (e.g., <code>10s</code>, <code>2m</code>).</td></tr>
+          <tr><td><code>interval</code></td><td>Duration</td><td>100ms</td><td>Frequency of character output (e.g., <code>500ms</code>, <code>1s</code>).</td></tr>
         </table>
       </div>
       <div class="toolbox">
         <input type="text" id="slowVal" value="5m">
-        <button onclick="run('/slow?duration=' + v('slowVal'))">Open Stream</button>
+        <input type="text" id="slowInterval" value="100ms">
+        <button onclick="run('/slow?duration=' + v('slowVal') + '&interval=' + v('slowInterval'))">Open Stream</button>
       </div>
     </div>
 

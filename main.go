@@ -439,16 +439,27 @@ func main() {
 				if d, err := time.ParseDuration(r.URL.Query().Get("duration")); err == nil {
 					dur = d
 				}
-				logger.Info().Str("duration", dur.String()).Msg("slow responder started")
+				interval := 100 * time.Millisecond
+				if d, err := time.ParseDuration(r.URL.Query().Get("interval")); err == nil {
+					interval = d
+				}
+
+				logger.Info().Str("duration", dur.String()).Str("interval", interval.String()).Msg("slow responder started")
 				ctx, cancel := context.WithTimeout(r.Context(), dur)
 				defer cancel()
-				w.Header().Add("Content-Type", "text/plain")
+				w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 				w.Header().Set("X-Content-Type-Options", "nosniff")
 				w.WriteHeader(http.StatusOK)
 
-				fmt.Fprintf(w, "Will write for %s or until connection is aborted\n\n", dur.String())
-
-				tick := time.Tick(100 * time.Millisecond)
+				fmt.Fprintf(w, "Will write for %s or until connection is aborted\n\n",
+                    dur.String())
+				if err := rc.Flush(); err != nil {
+					logger.Err(err).Msg("slow responder flush error")
+					if errors.Is(err, http.ErrNotSupported) {
+						return
+					}
+				}
+				tick := time.Tick(interval)
 				for {
 					select {
 					case <-tick:
