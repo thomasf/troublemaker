@@ -67,7 +67,7 @@
 
 
     <div class="endpoint">
-      <span class="url-line"><a href="/nothing">/nothing</a></div>span>
+      <span class="url-line"><a href="/nothing">/nothing</a></span>
       <div class="doc-section">
         Opens a TCP connection but sends <strong>nothing</strong> (no headers, no body).
         <table class="params-table">
@@ -78,6 +78,17 @@
       <div class="toolbox">
         <input type="text" id="nothingVal" value="30s">
         <button onclick="run('/nothing?duration=' + v('nothingVal'))">Start Stall</button>
+      </div>
+    </div>
+
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/killhttp">/killhttp</a></span>
+      <div class="doc-section">
+        Gracefully shuts down the HTTP server. The application will continue running but will no longer respond to HTTP requests.
+      </div>
+      <div class="toolbox">
+        <button class="danger" onclick="run('/killhttp')">Kill HTTP Server</button>
       </div>
     </div>
 

@@ -483,12 +483,30 @@ func main() {
 					time.Sleep(10 * time.Millisecond)
 				}
 			})
+
+			server := &http.Server{
+				Addr:    flags.WebListen,
+				Handler: loggingMiddleware(mux),
+			}
+
+			mux.HandleFunc("/killhttp", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, "shutting down http server")
+				logger.Info().Msg("killhttp requested")
+				go func() {
+					time.Sleep(100 * time.Millisecond)
+					if err := server.Shutdown(context.Background()); err != nil {
+						logger.Err(err).Msg("http server shutdown error")
+					}
+				}()
+			})
+
 			time.Sleep(effectiveSettings.WebDelay)
 			logger.Info().Msg("listen")
-			handler := loggingMiddleware(mux)
-			if err := http.ListenAndServe(flags.WebListen, handler); err != nil {
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Fatal().Err(err).Msg("http listen error")
 			}
+			logger.Info().Msg("http server stopped")
 		}()
 	}
 
