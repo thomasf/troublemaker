@@ -28,6 +28,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	DefaultExitCode        = 1
+	DefaultSlowDuration    = 5 * time.Minute
+	DefaultSlowInterval    = 100 * time.Millisecond
+	DefaultNothingDuration = 5 * time.Minute
+)
+
 var logger zerolog.Logger
 
 var startTime = time.Now().UTC()
@@ -219,15 +226,23 @@ func newDocsHandler(flags Flags, effective EffectiveSettings, usage string) func
 
 	var buf bytes.Buffer
 	data := struct {
-		Flags             string
-		EffectiveSettings string
-		Usage             string
-		BuildInfo         string
+		Flags                  string
+		EffectiveSettings      string
+		Usage                  string
+		BuildInfo              string
+		DefaultExitCode        int
+		DefaultSlowDuration    time.Duration
+		DefaultSlowInterval    time.Duration
+		DefaultNothingDuration time.Duration
 	}{
-		Flags:             string(flagsData),
-		EffectiveSettings: string(effectiveData),
-		Usage:             usage,
-		BuildInfo:         buildInfoStr,
+		Flags:                  string(flagsData),
+		EffectiveSettings:      string(effectiveData),
+		Usage:                  usage,
+		BuildInfo:              buildInfoStr,
+		DefaultExitCode:        DefaultExitCode,
+		DefaultSlowDuration:    DefaultSlowDuration,
+		DefaultSlowInterval:    DefaultSlowInterval,
+		DefaultNothingDuration: DefaultNothingDuration,
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		panic(err)
@@ -276,7 +291,7 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.DurationVar(&f.ExitAfterJitter, "exit.after.jitter", 0, "exit after +/- jitter")
 	fs.IntVar(&f.ExitPercent, "exit.percent", 100, "% chance to exit if exit.after is set")
 
-	fs.IntVar(&f.ExitCode, "exit.code", 1, "exit code when exiting")
+	fs.IntVar(&f.ExitCode, "exit.code", DefaultExitCode, "exit code when exiting")
 
 	fs.BoolVar(&f.IgnoreSignals, "signals.ignore", false, "ignore shutdown signals")
 
@@ -428,18 +443,18 @@ func main() {
 				codeStr := r.URL.Query().Get("code")
 				code, err := strconv.ParseInt(codeStr, 10, 64)
 				if err != nil || code < 0 || code > 127 {
-					code = 1
+					code = DefaultExitCode
 				}
 				logger.Info().Msg("exit on http request")
 				os.Exit(int(code))
 			})
 			mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
 				rc := http.NewResponseController(w)
-				dur := 5 * time.Minute
+				dur := DefaultSlowDuration
 				if d, err := time.ParseDuration(r.URL.Query().Get("duration")); err == nil {
 					dur = d
 				}
-				interval := 100 * time.Millisecond
+				interval := DefaultSlowInterval
 				if d, err := time.ParseDuration(r.URL.Query().Get("interval")); err == nil {
 					interval = d
 				}
@@ -478,7 +493,7 @@ func main() {
 				}
 			})
 			mux.HandleFunc("/nothing", func(w http.ResponseWriter, r *http.Request) {
-				dur := 5 * time.Minute
+				dur := DefaultNothingDuration
 				if d, err := time.ParseDuration(r.URL.Query().Get("duration")); err == nil {
 					dur = d
 				}

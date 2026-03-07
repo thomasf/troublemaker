@@ -49,13 +49,13 @@
         Streams a random emoji at a specified interval.
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
-          <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>How long to keep the stream open (e.g., <code>10s</code>, <code>2m</code>).</td></tr>
-          <tr><td><code>interval</code></td><td>Duration</td><td>100ms</td><td>Frequency of character output (e.g., <code>500ms</code>, <code>1s</code>).</td></tr>
+          <tr><td><code>duration</code></td><td>Duration</td><td>{{.DefaultSlowDuration}}</td><td>How long to keep the stream open (e.g., <code>10s</code>, <code>2m</code>).</td></tr>
+          <tr><td><code>interval</code></td><td>Duration</td><td>{{.DefaultSlowInterval}}</td><td>Frequency of character output (e.g., <code>500ms</code>, <code>1s</code>).</td></tr>
         </table>
       </div>
       <div class="toolbox">
-        <input type="text" id="slowVal" value="5m">
-        <input type="text" id="slowInterval" value="100ms">
+        <input type="text" id="slowVal" value="{{.DefaultSlowDuration}}">
+        <input type="text" id="slowInterval" value="{{.DefaultSlowInterval}}">
         <button onclick="run('/slow?duration=' + v('slowVal') + '&interval=' + v('slowInterval'))">Open Stream</button>
       </div>
     </div>
@@ -88,11 +88,11 @@
         Opens a TCP connection but sends <strong>nothing</strong> (no headers, no body).
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
-          <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>Time to stall before hijacking and closing the connection.</td></tr>
+          <tr><td><code>duration</code></td><td>Duration</td><td>{{.DefaultNothingDuration}}</td><td>Time to stall before hijacking and closing the connection.</td></tr>
         </table>
       </div>
       <div class="toolbox">
-        <input type="text" id="nothingVal" value="60s">
+        <input type="text" id="nothingVal" value="{{.DefaultNothingDuration}}">
         <button onclick="run('/nothing?duration=' + v('nothingVal'))">Start Stall</button>
       </div>
     </div>
@@ -115,11 +115,11 @@
         Immediately terminates the troublemaker server process.
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
-          <tr><td><code>code</code></td><td>Integer</td><td>1</td><td>The OS exit status code (0-127).</td></tr>
+          <tr><td><code>code</code></td><td>Integer</td><td>{{.DefaultExitCode}}</td><td>The OS exit status code (0-127).</td></tr>
         </table>
       </div>
       <div class="toolbox">
-        <input type="number" id="exitVal" value="1">
+        <input type="number" id="exitVal" value="{{.DefaultExitCode}}">
         <button class="danger" onclick="run('/exit/' + v('exitVal'))">Terminate Server</button>
       </div>
     </div>
