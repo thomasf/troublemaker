@@ -81,6 +81,33 @@
       </div>
     </div>
 
+    <div class="endpoint">
+      <span class="url-line"><a href="/load/random">/load/random</a></span>
+      <div class="doc-section">
+        Generates a new random seed and redirects to <code>/load/seed/[seed]</code>.
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/load/seed/">/load/seed/[seed]</a></span>
+      <div class="doc-section">
+        Starts a reproducible random load schedule based on the provided <code>seed</code> (unsigned 64-bit integer).
+        The schedule is always displayed, even if a load generator is already active.
+        Note that the schedule generation logic may change between versions, so seeds might not be stable over long periods.
+        The test is constrained by the following limits:
+        <ul>
+          <li>Max CPU: <code>{{.RandomLoadMaxCPU}}%</code></li>
+          <li>Max RAM: <code>{{.RandomLoadMaxRAM}}MB</code></li>
+          <li>Total Duration: <code>{{.RandomLoadTotalDuration}}</code></li>
+        </ul>
+        The response contains the seed used and the full schedule of load steps.
+      </div>
+      <div class="toolbox">
+        <input type="text" id="randomSeed" placeholder="Optional Seed">
+        <button onclick="run('/load/seed/' + v('randomSeed'))">Start/View Load Schedule</button>
+      </div>
+    </div>
+
 
     <div class="endpoint">
       <span class="url-line"><a href="/nothing">/nothing</a></span>

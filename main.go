@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -29,10 +30,13 @@ import (
 )
 
 const (
-	DefaultExitCode        = 1
-	DefaultSlowDuration    = 5 * time.Minute
-	DefaultSlowInterval    = 100 * time.Millisecond
-	DefaultNothingDuration = 5 * time.Minute
+	DefaultExitCode         = 1
+	DefaultSlowDuration     = 5 * time.Minute
+	DefaultSlowInterval     = 100 * time.Millisecond
+	DefaultNothingDuration  = 5 * time.Minute
+	MaxRandomLoadRAM        = 666               // MB
+	MaxRandomLoadCPU        = 90                // Percent
+	RandomLoadTotalDuration = 110 * time.Minute // Total test duration
 )
 
 var logger zerolog.Logger
@@ -228,23 +232,29 @@ func newDocsHandler(flags Flags, effective EffectiveSettings, usage string) func
 
 	var buf bytes.Buffer
 	data := struct {
-		Flags                  string
-		EffectiveSettings      string
-		Usage                  string
-		BuildInfo              string
-		DefaultExitCode        int
-		DefaultSlowDuration    time.Duration
-		DefaultSlowInterval    time.Duration
-		DefaultNothingDuration time.Duration
+		Flags                   string
+		EffectiveSettings       string
+		Usage                   string
+		BuildInfo               string
+		DefaultExitCode         int
+		DefaultSlowDuration     time.Duration
+		DefaultSlowInterval     time.Duration
+		DefaultNothingDuration  time.Duration
+		RandomLoadMaxRAM        int
+		RandomLoadMaxCPU        int
+		RandomLoadTotalDuration time.Duration
 	}{
-		Flags:                  string(flagsData),
-		EffectiveSettings:      string(effectiveData),
-		Usage:                  usage,
-		BuildInfo:              buildInfoStr,
-		DefaultExitCode:        DefaultExitCode,
-		DefaultSlowDuration:    DefaultSlowDuration,
-		DefaultSlowInterval:    DefaultSlowInterval,
-		DefaultNothingDuration: DefaultNothingDuration,
+		Flags:                   string(flagsData),
+		EffectiveSettings:       string(effectiveData),
+		Usage:                   usage,
+		BuildInfo:               buildInfoStr,
+		DefaultExitCode:         DefaultExitCode,
+		DefaultSlowDuration:     DefaultSlowDuration,
+		DefaultSlowInterval:     DefaultSlowInterval,
+		DefaultNothingDuration:  DefaultNothingDuration,
+		RandomLoadMaxRAM:        MaxRandomLoadRAM,
+		RandomLoadMaxCPU:        MaxRandomLoadCPU,
+		RandomLoadTotalDuration: RandomLoadTotalDuration,
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		panic(err)
@@ -435,6 +445,50 @@ func main() {
 				w.WriteHeader(http.StatusOK)
 				startCombinedLoad()
 			})
+			mux.HandleFunc("/load/random", func(w http.ResponseWriter, r *http.Request) {
+				seed := rand.Uint64()
+				http.Redirect(w, r, fmt.Sprintf("/load/seed/%d", seed), http.StatusFound)
+			})
+			mux.HandleFunc("/load/seed/", func(w http.ResponseWriter, r *http.Request) {
+				seedStr := strings.TrimPrefix(r.URL.Path, "/load/seed/")
+				if seedStr == "" {
+					http.Redirect(w, r, "/load/random", http.StatusFound)
+					return
+				}
+				seed, err := strconv.ParseUint(seedStr, 10, 64)
+				if err != nil {
+					http.Error(w, "invalid seed", http.StatusBadRequest)
+					return
+				}
+
+				steps := generateRandomSchedule(seed)
+
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintf(w, "Random Load Schedule (Seed: %d)\n", seed)
+				fmt.Fprintln(w, "--------------------------------------------------")
+				fmt.Fprintf(w, "%-4s | %-12s | %-20s | %-10s | %-5s | %-5s\n", "Step", "Relative", "Wall Clock", "Duration", "CPU%", "MemMB")
+
+				now := time.Now()
+				relTime := time.Duration(0)
+				for i, step := range steps {
+					fmt.Fprintf(w, "%-4d | %-12s | %-20s | %-10s | %-5d | %-5d\n",
+						i, relTime, now.Add(relTime).Format("15:04:05"), step.Duration, step.CPUPercent, step.MemMB)
+					relTime += step.Duration
+				}
+				fmt.Fprintln(w, "--------------------------------------------------")
+
+				if !isRunningLoad.CompareAndSwap(0, 1) {
+					fmt.Fprintln(w, "\nWARNING: A load generator is already running. This schedule was NOT started.")
+					return
+				}
+
+				fmt.Fprintln(w, "\nSUCCESS: Load generator started with this schedule.")
+				go func() {
+					defer isRunningLoad.Store(0)
+					runLoadSteps(logger, steps)
+				}()
+			})
 			mux.HandleFunc("/exit/", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				codeStr := r.URL.Query().Get("code")
@@ -597,6 +651,49 @@ func runLoadSteps(l zerolog.Logger, steps []LoadStep) {
 			time.Sleep(step.Duration)
 		}
 	}
+}
+
+func generateRandomSchedule(seed uint64) []LoadStep {
+	r := rand.New(rand.NewPCG(seed, seed))
+	var steps []LoadStep
+	totalDur := time.Duration(0)
+	lastWasIdle := false
+
+	const (
+		MinLoadSeconds    = 15
+		MaxLoadSeconds    = 35
+		MinIdleSeconds    = 25
+		MaxIdleSeconds    = 4 * 60
+		MinCPULoadPercent = 5
+	)
+
+	for totalDur < RandomLoadTotalDuration {
+		isLoad := r.Float64() < 0.8
+		if lastWasIdle {
+			isLoad = true
+		}
+		var step LoadStep
+
+		if isLoad {
+			step.Duration = time.Duration(MinLoadSeconds+r.IntN(MaxLoadSeconds-MinLoadSeconds)) * time.Second
+			step.CPUPercent = r.IntN(MinCPULoadPercent + (MaxRandomLoadCPU - MinCPULoadPercent))
+			step.MemMB = r.IntN(MaxRandomLoadRAM + 1)
+		} else {
+			step.Duration = time.Duration(MinIdleSeconds+r.IntN(MaxIdleSeconds-MinIdleSeconds)) * time.Second
+		}
+
+		if totalDur+step.Duration > RandomLoadTotalDuration {
+			step.Duration = RandomLoadTotalDuration - totalDur
+		}
+
+		steps = append(steps, step)
+		totalDur += step.Duration
+		lastWasIdle = !isLoad
+		if totalDur >= RandomLoadTotalDuration {
+			break
+		}
+	}
+	return steps
 }
 
 func doStartCPULoad() {
