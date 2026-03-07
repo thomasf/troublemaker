@@ -37,9 +37,16 @@
     </div>
 
     <div class="endpoint">
+      <span class="url-line"><a href="/logs">/logs</a></span>
+      <div class="doc-section">
+        Returns the last <code>log.size</code> lines of application logs in plain text.
+      </div>
+    </div>
+
+    <div class="endpoint">
       <span class="url-line"><a href="/slow">/slow</a></span>
       <div class="doc-section">
-        Streams a random emoji every 100ms. Used to test if the load balancer/proxy supports <strong>Response Streaming</strong> and <code>Chunked Transfer Encoding</code>.
+        Streams a random emoji every 100ms.
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
           <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>How long to keep the stream open (e.g., <code>10s</code>, <code>2m</code>).</td></tr>
@@ -52,9 +59,17 @@
     </div>
 
     <div class="endpoint">
-      <span class="url-line"><a href="/nothing">/nothing</a></span>
+      <span class="url-line"><a href="/cpuload">/cpuload</a></span>
       <div class="doc-section">
-        Opens a TCP connection but sends <strong>nothing</strong> (no headers, no body). Used to trigger <code>ReadTimeout</code> or <code>Gateway Timeout</code> on proxies.
+        Starts the predefined cpu load pattern, only a single cpu load instance will run at one time so calling this when a cpuload is alrady ongoing is an noop.
+      </div>
+    </div>
+
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/nothing">/nothing</a></div>span>
+      <div class="doc-section">
+        Opens a TCP connection but sends <strong>nothing</strong> (no headers, no body).
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
           <tr><td><code>duration</code></td><td>Duration</td><td>5m</td><td>Time to stall before hijacking and closing the connection.</td></tr>
@@ -66,10 +81,11 @@
       </div>
     </div>
 
+
     <div class="endpoint">
       <span class="url-line"><a href="/exit/">/exit/[code]</a></span>
       <div class="doc-section">
-        Immediately terminates the Go process. Essential for testing <strong>Container Restarts</strong> and <strong>High Availability</strong> failover.
+        Immediately terminates the troublemaker server process.
         <table class="params-table">
           <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
           <tr><td><code>code</code></td><td>Integer</td><td>1</td><td>The OS exit status code (0-127).</td></tr>

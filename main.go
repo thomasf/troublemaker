@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
@@ -8,13 +9,16 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -32,11 +36,56 @@ var t0 = time.Now()
 
 var instanceID = xid.New().String()
 
+type LogBuffer struct {
+	mu    sync.RWMutex
+	lines []string
+	size  int
+}
+
+func (lb *LogBuffer) Write(p []byte) (n int, err error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	if lb.size <= 0 {
+		return len(p), nil
+	}
+	lb.lines = append(lb.lines, string(p))
+	if len(lb.lines) > lb.size {
+		lb.lines = lb.lines[len(lb.lines)-lb.size:]
+	}
+	return len(p), nil
+}
+
+func (lb *LogBuffer) WriteTo(w io.Writer) (int64, error) {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+	var total int64
+	for _, line := range lb.lines {
+		n, err := fmt.Fprint(w, line)
+		total += int64(n)
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+var logBuffer = &LogBuffer{}
+
 func init() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{
+	consoleWriter := zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339Nano,
-	})
+	}
+
+	bufferWriter := zerolog.ConsoleWriter{
+		Out:        logBuffer,
+		TimeFormat: time.RFC3339Nano,
+		NoColor:    true,
+	}
+
+	multi := zerolog.MultiLevelWriter(consoleWriter, bufferWriter)
+
+	log.Logger = log.Output(multi)
 
 	logger = log.With().
 		Str("instance", instanceID).
@@ -44,6 +93,72 @@ func init() {
 		Hook(zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, message string) {
 			e.Str("t", time.Now().Sub(t0).String())
 		}))
+}
+
+func newLogsHandler() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		logBuffer.WriteTo(w)
+	}
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if rw.wroteHeader {
+		return
+	}
+	rw.status = code
+	rw.wroteHeader = true
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(p []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(p)
+}
+
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, fmt.Errorf("http.Hijacker not supported")
+}
+
+var logIgnored=map[string]bool{
+    "/logs":true,
+    "/favicon.ico":true,
+}
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		if logIgnored[r.URL.Path]  {
+			return
+		}
+		logger.Info().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Int("status", rw.status).
+			Dur("duration", time.Since(start)).
+			Str("remote_addr", r.RemoteAddr).
+			Str("user_agent", r.UserAgent()).
+			Msg("http request")
+	})
 }
 
 func newInfoHandler(flags Flags, effectiveSettings EffectiveSettings) func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +199,6 @@ func newRootHandler() func(w http.ResponseWriter, r *http.Request) {
 		version = buildInfo.Main.Version
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		logger.Info().Str("user-agent", r.Header.Get("User-Agent")).Msg("root http handler called")
 		w.Header().Add("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "troublemaker: %s\n", version)
@@ -151,6 +265,8 @@ type Flags struct {
 	CPULoadWorkers  int           `json:"cpuload.workers"`
 	CPULoadDuration time.Duration `json:"cpuload.duration"`
 
+	LogSize int `json:"log.size"`
+
 	RandSeed1 uint64 `json:"rand.seed1"`
 	RandSeed2 uint64 `json:"rand.seed2"`
 }
@@ -171,6 +287,8 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 
 	fs.BoolVar(&f.CPUloadEnable, "cpuload.enable", false, "enable cpu load generator")
 	fs.IntVar(&f.CPULoadWorkers, "cpuload.workers", 1, "number of concurrent goroutines, won't go over max")
+
+	fs.IntVar(&f.LogSize, "log.size", 10000, "number of log lines to keep in memory")
 
 	fs.Uint64Var(&f.RandSeed1, "rand.seed1", rand.Uint64(), "seed1 for random generator")
 	fs.Uint64Var(&f.RandSeed2, "rand.seed2", rand.Uint64(), "seed2 for random generator")
@@ -224,6 +342,11 @@ func main() {
 		logger.Err(err).Msg("could not parse flags")
 		os.Exit(1)
 	}
+
+	logBuffer.mu.Lock()
+	logBuffer.size = flags.LogSize
+	logBuffer.mu.Unlock()
+
 	logger.Info().Str("command", os.Args[0]).Strs("args", fs.Args()).Msg("command line args")
 
 	if flags.IgnoreSignals {
@@ -287,6 +410,7 @@ func main() {
 			mux.HandleFunc("/", newRootHandler())
 			mux.HandleFunc("/docs", newDocsHandler(flags, effectiveSettings, usage))
 			mux.HandleFunc("/info", newInfoHandler(flags, effectiveSettings))
+			mux.HandleFunc("/logs", newLogsHandler())
 
 			mux.HandleFunc("/cpuload", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -361,7 +485,8 @@ func main() {
 			})
 			time.Sleep(effectiveSettings.WebDelay)
 			logger.Info().Msg("listen")
-			if err := http.ListenAndServe(flags.WebListen, mux); err != nil {
+			handler := loggingMiddleware(mux)
+			if err := http.ListenAndServe(flags.WebListen, handler); err != nil {
 				logger.Fatal().Err(err).Msg("http listen error")
 			}
 		}()
