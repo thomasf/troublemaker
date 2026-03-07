@@ -1,17 +1,16 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
 	"io"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -125,17 +124,8 @@ func (rw *responseWriter) Write(p []byte) (int, error) {
 	return rw.ResponseWriter.Write(p)
 }
 
-func (rw *responseWriter) Flush() {
-	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hj, ok := rw.ResponseWriter.(http.Hijacker); ok {
-		return hj.Hijack()
-	}
-	return nil, nil, fmt.Errorf("http.Hijacker not supported")
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }
 
 var logIgnored=map[string]bool{
@@ -427,11 +417,7 @@ func main() {
 				os.Exit(int(code))
 			})
 			mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
-				flusher, ok := w.(http.Flusher)
-				if !ok {
-					http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-					return
-				}
+				rc := http.NewResponseController(w)
 				dur := 5 * time.Minute
 				if d, err := time.ParseDuration(r.URL.Query().Get("duration")); err == nil {
 					dur = d
@@ -450,7 +436,12 @@ func main() {
 					select {
 					case <-tick:
 						w.Write([]byte(GetSmiley()))
-						flusher.Flush()
+						if err := rc.Flush(); err != nil {
+							logger.Err(err).Msg("slow responder flush error")
+							if errors.Is(err, http.ErrNotSupported) {
+								return
+							}
+						}
 					case <-ctx.Done():
 						logger.Info().Err(ctx.Err()).Msg("slow responder exiting")
 						return
@@ -471,12 +462,10 @@ func main() {
 					select {
 					case <-ctx.Done():
 						logger.Info().Err(ctx.Err()).Msg("nothing responder exiting")
-						hj, ok := w.(http.Hijacker)
-						if ok {
-							conn, _, err := hj.Hijack()
-							if err == nil {
-								defer conn.Close()
-							}
+						rc := http.NewResponseController(w)
+						conn, _, err := rc.Hijack()
+						if err == nil {
+							defer conn.Close()
 						}
 						return
 					}
