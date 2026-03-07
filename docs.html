@@ -59,9 +59,23 @@
     </div>
 
     <div class="endpoint">
-      <span class="url-line"><a href="/cpuload">/cpuload</a></span>
+      <span class="url-line"><a href="/load/cpu">/load/cpu</a></span>
       <div class="doc-section">
-        Starts the predefined cpu load pattern, only a single cpu load instance will run at one time so calling this when a cpuload is alrady ongoing is an noop.
+        Starts the predefined cpu load pattern. Only a single load generator can run at one time.
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/load/mem">/load/mem</a></span>
+      <div class="doc-section">
+        Starts the predefined memory load pattern. Only a single load generator can run at one time.
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/load/combined">/load/combined</a></span>
+      <div class="doc-section">
+        Starts a combined cpu and memory load pattern. Only a single load generator can run at one time.
       </div>
     </div>
 

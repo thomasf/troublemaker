@@ -128,16 +128,17 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
-var logIgnored=map[string]bool{
-    "/logs":true,
-    "/favicon.ico":true,
+var logIgnored = map[string]bool{
+	"/logs":        true,
+	"/favicon.ico": true,
 }
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		if logIgnored[r.URL.Path]  {
+		if logIgnored[r.URL.Path] {
 			return
 		}
 		logger.Info().
@@ -255,6 +256,10 @@ type Flags struct {
 	CPULoadWorkers  int           `json:"cpuload.workers"`
 	CPULoadDuration time.Duration `json:"cpuload.duration"`
 
+	MemloadEnable bool          `json:"memload.enable"`
+	MemloadMB     int           `json:"memload.mb"`
+	MemloadWait   time.Duration `json:"memload.wait"`
+
 	LogSize int `json:"log.size"`
 
 	RandSeed1 uint64 `json:"rand.seed1"`
@@ -277,6 +282,10 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 
 	fs.BoolVar(&f.CPUloadEnable, "cpuload.enable", false, "enable cpu load generator")
 	fs.IntVar(&f.CPULoadWorkers, "cpuload.workers", 1, "number of concurrent goroutines, won't go over max")
+
+	fs.BoolVar(&f.MemloadEnable, "memload.enable", false, "enable memory load generator")
+	fs.IntVar(&f.MemloadMB, "memload.mb", 100, "memory to allocate in MB")
+	fs.DurationVar(&f.MemloadWait, "memload.wait", 0, "wait duration before starting memory load")
 
 	fs.IntVar(&f.LogSize, "log.size", 10000, "number of log lines to keep in memory")
 
@@ -402,9 +411,17 @@ func main() {
 			mux.HandleFunc("/info", newInfoHandler(flags, effectiveSettings))
 			mux.HandleFunc("/logs", newLogsHandler())
 
-			mux.HandleFunc("/cpuload", func(w http.ResponseWriter, r *http.Request) {
+			mux.HandleFunc("/load/cpu", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				startCPULoad()
+			})
+			mux.HandleFunc("/load/mem", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				startMemLoad()
+			})
+			mux.HandleFunc("/load/combined", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				startCombinedLoad()
 			})
 			mux.HandleFunc("/exit/", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -507,12 +524,60 @@ func main() {
 		}
 	}
 
+	if flags.MemloadEnable {
+		go func() {
+			if flags.MemloadWait > 0 {
+				time.Sleep(flags.MemloadWait)
+			}
+			startMemLoad()
+		}()
+	}
+
 	for {
 		time.Sleep(time.Second)
 	}
 }
 
-var startCPULoad = Guard(doStartCPULoad)
+type LoadStep struct {
+	CPUPercent int
+	MemMB      int
+	Duration   time.Duration
+}
+
+func runLoadSteps(l zerolog.Logger, steps []LoadStep) {
+	var data []byte
+	t0 := time.Now()
+	for i, step := range steps {
+		logger := l.With().
+			Int("step.#", i).
+			Dur("elapsed", time.Now().Sub(t0).Round(100*time.Millisecond)).
+			Logger()
+
+		logger.Info().
+			Int("cpu", step.CPUPercent).
+			Int("mem", step.MemMB).
+			Dur("dur", step.Duration).
+			Msg("step starts")
+
+		if step.MemMB > 0 {
+			newData := make([]byte, step.MemMB*1024*1024)
+			for j := 0; j < len(newData); j += 4096 {
+				newData[j] = 1
+			}
+			data = newData
+		} else {
+			if data != nil {
+				data = nil
+				runtime.GC()
+			}
+		}
+		if step.CPUPercent > 0 {
+			doBusyWork(step.Duration, step.CPUPercent)
+		} else {
+			time.Sleep(step.Duration)
+		}
+	}
+}
 
 func doStartCPULoad() {
 	testID := xid.New()
@@ -526,80 +591,87 @@ func doStartCPULoad() {
 	const shortSleep = 30 * time.Second
 	const longSleep = 10 * time.Minute
 
-	type Action struct {
-		Percent  int
-		Duration time.Duration
-	}
-
-	tests := []Action{
-		{Duration: burst, Percent: 90},
+	tests := []LoadStep{
+		{Duration: burst, CPUPercent: 90},
 		{Duration: shortSleep},
-		{Duration: burst, Percent: 90},
+		{Duration: burst, CPUPercent: 90},
 		{Duration: shortSleep},
-		{Duration: normal, Percent: 10},
+		{Duration: normal, CPUPercent: 10},
 		{Duration: sleep},
-		{Duration: normal, Percent: 20},
+		{Duration: normal, CPUPercent: 20},
 		{Duration: sleep},
-		{Duration: normal, Percent: 30},
+		{Duration: normal, CPUPercent: 30},
 		{Duration: sleep},
-		{Duration: normal, Percent: 40},
+		{Duration: normal, CPUPercent: 40},
 		{Duration: sleep},
-		{Duration: normal, Percent: 50},
+		{Duration: normal, CPUPercent: 50},
 		{Duration: sleep},
-		{Duration: normal, Percent: 60},
+		{Duration: normal, CPUPercent: 60},
 		{Duration: sleep},
-		{Duration: normal, Percent: 70},
+		{Duration: normal, CPUPercent: 70},
 		{Duration: sleep},
-		{Duration: burst, Percent: 90},
+		{Duration: burst, CPUPercent: 90},
 		{Duration: shortSleep},
-		{Duration: burst, Percent: 90},
+		{Duration: burst, CPUPercent: 90},
 		{Duration: sleep},
-		{Duration: normal, Percent: 70},
-		{Duration: normal, Percent: 50},
-		{Duration: normal, Percent: 20},
+		{Duration: normal, CPUPercent: 70},
+		{Duration: normal, CPUPercent: 50},
+		{Duration: normal, CPUPercent: 20},
 		{Duration: shortSleep},
-		{Duration: burst, Percent: 90},
+		{Duration: burst, CPUPercent: 90},
 		{Duration: longSleep},
-		{Duration: burst, Percent: 90},
+		{Duration: burst, CPUPercent: 90},
 		{Duration: longSleep},
-		{Duration: burst, Percent: 90},
+		{Duration: burst, CPUPercent: 90},
 		{Duration: sleep},
-		{Duration: burst, Percent: 50},
+		{Duration: burst, CPUPercent: 50},
 		{Duration: sleep},
-		{Duration: burst, Percent: 80},
+		{Duration: burst, CPUPercent: 80},
 		{Duration: sleep},
-		{Duration: burst, Percent: 70},
+		{Duration: burst, CPUPercent: 70},
 		{Duration: longSleep},
 	}
 
-	// {
-	// 	var sb strings.Builder
-	// 	var cum time.Duration
-	// 	for i, action := range tests {
-	// 		sb.WriteRune('\n')
-	// 		fmt.Fprintf(&sb, "%03d %s ", i, cum.String())
-	// 		if action.Percent == 0 {
-	// 			fmt.Fprintf(&sb, "sleep for %s", action.Duration)
-	// 			continue
-	// 		}
-	// 		sb.WriteString(fmt.Sprintf("use %v%% cpu for %s", action.Percent, action.Duration.String()))
-	// 		cum += action.Duration
+	runLoadSteps(logger, tests)
+}
 
-	// 	}
+func doStartMemLoad() {
+	testID := xid.New()
+	logger := logger.With().Str("memload.id", testID.String()).Logger()
+	logger.Info().Msg("memload test starts")
+	defer logger.Info().Msg("memload test ended")
 
-	// 	log.Info().Msg("test plan:" + sb.String())
-	// }
-	t0 := time.Now()
-	for i, action := range tests {
-		logger := logger.With().Int("test.#", i).Dur("test.time", time.Now().Sub(t0).Round(100*time.Millisecond)).Logger()
-		if action.Percent == 0 {
-			logger.Info().Msg("Sleep for " + action.Duration.String())
-			time.Sleep(action.Duration)
-			continue
-		}
-		logger.Info().Msg(fmt.Sprintf("generate %v%% load for %s", action.Percent, action.Duration.String()))
-		doBusyWork(action.Duration, action.Percent)
+	const short = 1 * time.Minute
+	const long = 5 * time.Minute
+
+	tests := []LoadStep{
+		{Duration: short, MemMB: 100},
+		{Duration: short, MemMB: 0},
+		{Duration: short, MemMB: 300},
+		{Duration: short, MemMB: 0},
+		{Duration: long, MemMB: 300},
+		{Duration: short, MemMB: 0},
+		{Duration: long, MemMB: 400},
+		{Duration: short, MemMB: 0},
 	}
+
+	runLoadSteps(logger, tests)
+}
+
+func doStartCombinedLoad() {
+	testID := xid.New()
+	logger := logger.With().Str("combinedload.id", testID.String()).Logger()
+	logger.Info().Msg("combined load test starts")
+	defer logger.Info().Msg("combined load test ended")
+
+	tests := []LoadStep{
+		{Duration: 1 * time.Minute, CPUPercent: 50, MemMB: 256},
+		{Duration: 1 * time.Minute, CPUPercent: 10, MemMB: 512},
+		{Duration: 1 * time.Minute, CPUPercent: 90, MemMB: 128},
+		{Duration: 1 * time.Minute, CPUPercent: 0, MemMB: 0},
+	}
+
+	runLoadSteps(logger, tests)
 }
 
 func doBusyWork(duration time.Duration, percentage int) {
@@ -619,16 +691,22 @@ func doBusyWork(duration time.Duration, percentage int) {
 	}
 }
 
+var isRunningLoad atomic.Int32
+
 func Guard(fn func()) func() {
-	var isRunning atomic.Int32
 	return func() {
-		if !isRunning.CompareAndSwap(0, 1) {
+		if !isRunningLoad.CompareAndSwap(0, 1) {
+			logger.Warn().Msg("a load generator is already running, skipping")
 			return
 		}
-		defer isRunning.Store(0)
+		defer isRunningLoad.Store(0)
 		fn()
 	}
 }
+
+var startCPULoad = Guard(doStartCPULoad)
+var startMemLoad = Guard(doStartMemLoad)
+var startCombinedLoad = Guard(doStartCombinedLoad)
 
 func GetSmiley() string {
 	const (
