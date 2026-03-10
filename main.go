@@ -105,7 +105,7 @@ func init() {
 		Str("instance", instanceID).
 		Logger().
 		Hook(zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, message string) {
-			e.Str("t", time.Now().Sub(t0).String())
+			e.Str("t", time.Since(t0).String())
 		}))
 }
 
@@ -270,7 +270,7 @@ func newInfoHandler(flags Flags, effectiveSettings EffectiveSettings) func(w htt
 		fmt.Fprintf(w, "maxprocs: %v\n", runtime.GOMAXPROCS(0))
 		fmt.Fprintf(w, "instance id: %s\n", instanceID)
 		fmt.Fprintf(w, "time: %s\n", time.Now().Format(time.RFC3339Nano))
-		fmt.Fprintf(w, "uptime %s\n", time.Now().Sub(t0).String())
+		fmt.Fprintf(w, "uptime %s\n", time.Since(t0).String())
 
 		fmt.Fprintf(w, "\nBuild info:\n%s\n", buildInfoStr)
 		fmt.Fprintf(w, "\nFlags:\n%s\n", string(flagsData))
@@ -290,7 +290,7 @@ func newRootHandler() func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "troublemaker: %s\n", version)
 		fmt.Fprintf(w, "instance id: %s\n", instanceID)
 		fmt.Fprintf(w, "time: %s\n", time.Now().Format(time.RFC3339Nano))
-		fmt.Fprintf(w, "uptime %s\n", time.Now().Sub(t0).String())
+		fmt.Fprintf(w, "uptime %s\n", time.Since(t0).String())
 	}
 }
 
@@ -464,7 +464,7 @@ func main() {
 		go func() {
 			for s := range c {
 				logger.Info().Stringer("signal", s).
-					Dur("after", time.Now().Sub(startTime)).
+					Dur("after", time.Since(startTime)).
 					Msg("ignore signal")
 			}
 		}()
@@ -700,7 +700,7 @@ func runLoadSteps(l zerolog.Logger, steps []LoadStep) {
 	for i, step := range steps {
 		logger := l.With().
 			Int("step.#", i).
-			Dur("elapsed", time.Now().Sub(t0).Round(100*time.Millisecond)).
+			Dur("elapsed", time.Since(t0).Round(100*time.Millisecond)).
 			Logger()
 
 		logger.Info().
