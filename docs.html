@@ -18,6 +18,7 @@
       .params-table th { color: #888; text-transform: uppercase; font-size: 0.75em; }
       .toolbox { margin-top: 15px; padding-top: 15px; border-top: 1px dashed #ccc; display: flex; align-items: center; gap: 10px; }
       input { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; width: 100px; }
+      input.full-width { flex: 1; width: auto; }
       button { padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
       button:hover { background: #0056b3; }
       button.danger { background: #dc3545; }
@@ -40,6 +41,34 @@
       <span class="url-line"><a href="/logs">/logs</a></span>
       <div class="doc-section">
         Returns the last <code>log.size</code> lines of application logs in plain text.
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line">/cache/[preset][.ext]</span>
+      <div class="doc-section">
+        Returns a page with preset cache headers. The <code>Content-Type</code> is automatically set based on the file extension (e.g., <code>.html</code>, <code>.json</code>, <code>.txt</code>).
+        <table class="params-table">
+          <tr><th>Preset</th><th>Description</th></tr>
+          <tr><td><code><a href="/cache/no-cache">no-cache</a></code></td><td>Sets <code>Cache-Control: no-cache</code></td></tr>
+          <tr><td><code><a href="/cache/no-store">no-store</a></code></td><td>Sets <code>Cache-Control: no-store</code></td></tr>
+          <tr><td><code><a href="/cache/public-1h">public-1h</a></code></td><td>Sets <code>Cache-Control: public, max-age=3600</code></td></tr>
+          <tr><td><code><a href="/cache/private-1h">private-1h</a></code></td><td>Sets <code>Cache-Control: private, max-age=3600</code></td></tr>
+        </table>
+        Example with extension: <code><a href="/cache/public-1h.json">/cache/public-1h.json</a></code>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line">/set-headers/[header]/[value]/...[.ext]</span>
+      <div class="doc-section">
+        Dynamically sets response headers based on the request path. Multiple header/value pairs can be provided.
+        The <code>Content-Type</code> is automatically set if a file extension is provided at the end of the path.
+        Example: <code><a href="/set-headers/Cache-Control/max-age=60/X-Custom-Header/Hello.html">/set-headers/Cache-Control/max-age=60/X-Custom-Header/Hello.html</a></code>
+      </div>
+      <div class="toolbox">
+        <input type="text" id="headerPath" class="full-width" value="Cache-Control/max-age=60.json">
+        <button onclick="run('/set-headers/' + v('headerPath'))">Request with Headers</button>
       </div>
     </div>
 

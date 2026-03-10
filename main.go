@@ -11,9 +11,11 @@ import (
 	"html/template"
 	"io"
 	"math/rand/v2"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -162,6 +164,86 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			Str("remote_addr", r.RemoteAddr).
 			Str("user_agent", r.UserAgent()).
 			Msg("http request")
+	})
+}
+
+func disableCachingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func newSetHeadersHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fullPath := r.URL.Path
+		ext := path.Ext(fullPath)
+		contentType := mime.TypeByExtension(ext)
+		if contentType == "" {
+			contentType = "text/plain"
+		}
+		w.Header().Set("Content-Type", contentType)
+
+		pathParts := strings.TrimPrefix(fullPath, "/set-headers/")
+		pathParts = strings.TrimSuffix(pathParts, ext)
+
+		parts := strings.Split(pathParts, "/")
+		for i := 0; i < len(parts)-1; i += 2 {
+			key := parts[i]
+			val := parts[i+1]
+			if key != "" && val != "" {
+				w.Header().Set(key, val)
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Set Headers page\n")
+		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
+		fmt.Fprintf(w, "Time: %s\n", time.Now().Format(time.RFC3339Nano))
+		fmt.Fprintln(w, "\nResponse Headers:")
+		for k, v := range w.Header() {
+			fmt.Fprintf(w, "%s: %s\n", k, strings.Join(v, ", "))
+		}
+	})
+}
+
+func newCacheHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fullPath := r.URL.Path
+		ext := path.Ext(fullPath)
+		contentType := mime.TypeByExtension(ext)
+		if contentType == "" {
+			contentType = "text/plain"
+		}
+		w.Header().Set("Content-Type", contentType)
+
+		preset := strings.TrimPrefix(fullPath, "/cache/")
+		preset = strings.TrimSuffix(preset, ext)
+
+		switch preset {
+		case "no-cache":
+			w.Header().Set("Cache-Control", "no-cache")
+		case "no-store":
+			w.Header().Set("Cache-Control", "no-store")
+		case "public-1h":
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+		case "private-1h":
+			w.Header().Set("Cache-Control", "private, max-age=3600")
+		default:
+			if preset != "" {
+				http.Error(w, "unknown preset", http.StatusNotFound)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Cache test page\n")
+		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
+		fmt.Fprintf(w, "Time: %s\n", time.Now().Format(time.RFC3339Nano))
+		fmt.Fprintln(w, "\nResponse Headers:")
+		for k, v := range w.Header() {
+			fmt.Fprintf(w, "%s: %s\n", k, strings.Join(v, ", "))
+		}
 	})
 }
 
@@ -432,6 +514,8 @@ func main() {
 			mux.HandleFunc("/docs", newDocsHandler(flags, effectiveSettings, usage))
 			mux.HandleFunc("/info", newInfoHandler(flags, effectiveSettings))
 			mux.HandleFunc("/logs", newLogsHandler())
+			mux.Handle("/cache/", newCacheHandler())
+			mux.Handle("/set-headers/", newSetHeadersHandler())
 
 			mux.HandleFunc("/load/cpu", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -552,24 +636,18 @@ func main() {
 				ctx, cancel := context.WithTimeout(r.Context(), dur)
 				defer cancel()
 
-				for {
-					select {
-					case <-ctx.Done():
-						logger.Info().Err(ctx.Err()).Msg("nothing responder exiting")
-						rc := http.NewResponseController(w)
-						conn, _, err := rc.Hijack()
-						if err == nil {
-							defer conn.Close()
-						}
-						return
-					}
-					time.Sleep(10 * time.Millisecond)
+				<-ctx.Done()
+				logger.Info().Err(ctx.Err()).Msg("nothing responder exiting")
+				rc := http.NewResponseController(w)
+				conn, _, err := rc.Hijack()
+				if err == nil {
+					defer conn.Close()
 				}
 			})
 
 			server := &http.Server{
 				Addr:    flags.WebListen,
-				Handler: loggingMiddleware(mux),
+				Handler: loggingMiddleware(disableCachingMiddleware(mux)),
 			}
 
 			mux.HandleFunc("/killhttp", func(w http.ResponseWriter, r *http.Request) {
