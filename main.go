@@ -117,13 +117,13 @@ func newLogsHandler() func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type responseWriter struct {
+type loggingMiddlewareResponseWriter struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
 }
 
-func (rw *responseWriter) WriteHeader(code int) {
+func (rw *loggingMiddlewareResponseWriter) WriteHeader(code int) {
 	if rw.wroteHeader {
 		return
 	}
@@ -132,14 +132,14 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-func (rw *responseWriter) Write(p []byte) (int, error) {
+func (rw *loggingMiddlewareResponseWriter) Write(p []byte) (int, error) {
 	if !rw.wroteHeader {
 		rw.WriteHeader(http.StatusOK)
 	}
 	return rw.ResponseWriter.Write(p)
 }
 
-func (rw *responseWriter) Unwrap() http.ResponseWriter {
+func (rw *loggingMiddlewareResponseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
@@ -151,7 +151,7 @@ var logIgnored = map[string]bool{
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		rw := &loggingMiddlewareResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
 		if logIgnored[r.URL.Path] {
 			return
