@@ -736,40 +736,74 @@ func generateRandomSchedule(seed uint64) []LoadStep {
 	r := rand.New(rand.NewPCG(seed, seed))
 	var steps []LoadStep
 	totalDur := time.Duration(0)
-	lastWasIdle := false
 
+	type Phase int
 	const (
-		MinLoadSeconds    = 15
-		MaxLoadSeconds    = 35
-		MinIdleSeconds    = 25
-		MaxIdleSeconds    = 4 * 60
-		MinCPULoadPercent = 5
+		None Phase = iota
+		SustainedLoad
+		VaryingLoad
+		Idle
 	)
 
+	var prevPhase Phase
 	for totalDur < RandomLoadTotalDuration {
-		isLoad := r.Float64() < 0.8
-		if lastWasIdle {
-			isLoad = true
-		}
-		var step LoadStep
-
-		if isLoad {
-			step.Duration = time.Duration(MinLoadSeconds+r.IntN(MaxLoadSeconds-MinLoadSeconds)) * time.Second
-			step.CPUPercent = r.IntN(MinCPULoadPercent + (MaxRandomLoadCPU - MinCPULoadPercent))
-			step.MemMB = r.IntN(MaxRandomLoadRAM + 1)
+		var currentPhase Phase
+		if prevPhase == None || prevPhase == Idle {
+			if r.Float64() < 0.5 {
+				currentPhase = SustainedLoad
+			} else {
+				currentPhase = VaryingLoad
+			}
 		} else {
-			step.Duration = time.Duration(MinIdleSeconds+r.IntN(MaxIdleSeconds-MinIdleSeconds)) * time.Second
+			if r.Float64() < 0.5 {
+				currentPhase = Idle
+			} else {
+				if prevPhase == SustainedLoad {
+					currentPhase = VaryingLoad
+				} else {
+					currentPhase = SustainedLoad
+				}
+			}
+		}
+		prevPhase = currentPhase
+
+		phaseDuration := time.Duration(5+r.IntN(10)) * time.Minute
+
+		if totalDur+phaseDuration > RandomLoadTotalDuration {
+			phaseDuration = RandomLoadTotalDuration - totalDur
 		}
 
-		if totalDur+step.Duration > RandomLoadTotalDuration {
-			step.Duration = RandomLoadTotalDuration - totalDur
-		}
+		switch currentPhase {
+		case SustainedLoad:
+			cpu := 30 + r.IntN(max(1, MaxRandomLoadCPU-30))
+			mem := r.IntN(MaxRandomLoadRAM + 1)
+			steps = append(steps, LoadStep{
+				CPUPercent: cpu,
+				MemMB:      mem,
+				Duration:   phaseDuration,
+			})
+			totalDur += phaseDuration
 
-		steps = append(steps, step)
-		totalDur += step.Duration
-		lastWasIdle = !isLoad
-		if totalDur >= RandomLoadTotalDuration {
-			break
+		case VaryingLoad:
+			phaseEnd := totalDur + phaseDuration
+			for totalDur < phaseEnd {
+				stepDur := time.Duration(2+r.IntN(28)) * time.Second
+				if totalDur+stepDur > phaseEnd {
+					stepDur = phaseEnd - totalDur
+				}
+				steps = append(steps, LoadStep{
+					CPUPercent: r.IntN(MaxRandomLoadCPU + 1),
+					MemMB:      r.IntN(MaxRandomLoadRAM + 1),
+					Duration:   stepDur,
+				})
+				totalDur += stepDur
+			}
+
+		case Idle:
+			steps = append(steps, LoadStep{
+				Duration: phaseDuration,
+			})
+			totalDur += phaseDuration
 		}
 	}
 	return steps
