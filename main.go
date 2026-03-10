@@ -371,8 +371,7 @@ type Flags struct {
 
 	LogSize int `json:"log.size"`
 
-	RandSeed1 uint64 `json:"rand.seed1"`
-	RandSeed2 uint64 `json:"rand.seed2"`
+	RandSeed uint64 `json:"rand.seed1"`
 }
 
 func (f *Flags) Register(fs *flag.FlagSet) {
@@ -398,12 +397,11 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 
 	fs.IntVar(&f.LogSize, "log.size", 10000, "number of log lines to keep in memory")
 
-	fs.Uint64Var(&f.RandSeed1, "rand.seed1", rand.Uint64(), "seed1 for random generator")
-	fs.Uint64Var(&f.RandSeed2, "rand.seed2", rand.Uint64(), "seed2 for random generator")
+	fs.Uint64Var(&f.RandSeed, "rand.seed", rand.Uint64(), "seed for random generator")
 }
 
 func (f Flags) EffectiveSettings() EffectiveSettings {
-	r := rand.New(rand.NewPCG(f.RandSeed1, f.RandSeed2))
+	r := rand.New(rand.NewPCG(f.RandSeed, f.RandSeed))
 
 	effectiveDuration := func(delay, jitter time.Duration) time.Duration {
 		if jitter == 0 || delay < 2 {
