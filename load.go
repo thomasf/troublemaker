@@ -1,0 +1,573 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"math/rand/v2"
+	"net/http"
+	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/rs/xid"
+	"github.com/rs/zerolog"
+)
+
+const (
+	MaxRandomLoadRAM        = 666              // MB
+	MaxRandomLoadCPU        = 90               // Percent
+	RandomLoadTotalDuration = 40 * time.Minute // Total test duration
+)
+
+type LoadStep struct {
+	CPUPercent int           `json:"cpu_percent"`
+	MemMB      int           `json:"mem_mb"`
+	Duration   time.Duration `json:"duration"`
+}
+
+type LoadGenerator struct {
+	isRunning atomic.Int32
+	mu        sync.RWMutex
+	cancel    context.CancelFunc
+	steps     []LoadStep
+	stepIdx   int
+	startTime time.Time
+	stepStart time.Time
+	logger    zerolog.Logger
+}
+
+func NewLoadGenerator(logger zerolog.Logger) *LoadGenerator {
+	return &LoadGenerator{
+		logger: logger,
+	}
+}
+
+func (lg *LoadGenerator) IsRunning() bool {
+	return lg.isRunning.Load() == 1
+}
+
+func (lg *LoadGenerator) GetStatus() (bool, []LoadStep, int, time.Time, time.Time) {
+	lg.mu.RLock()
+	defer lg.mu.RUnlock()
+	return lg.IsRunning(), lg.steps, lg.stepIdx, lg.startTime, lg.stepStart
+}
+
+func (lg *LoadGenerator) Abort() bool {
+	lg.mu.Lock()
+	defer lg.mu.Unlock()
+	if lg.cancel != nil {
+		lg.cancel()
+		lg.cancel = nil
+		return true
+	}
+	return false
+}
+
+func (lg *LoadGenerator) StartSchedule(seed uint64, duration time.Duration, types string) ([]LoadStep, bool) {
+	steps := lg.GenerateRandomSchedule(seed, duration, types)
+	if !lg.isRunning.CompareAndSwap(0, 1) {
+		return steps, false
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	lg.mu.Lock()
+	lg.cancel = cancel
+	lg.mu.Unlock()
+
+	go func() {
+		defer lg.isRunning.Store(0)
+		defer func() {
+			lg.mu.Lock()
+			defer lg.mu.Unlock()
+			if lg.cancel != nil {
+				lg.cancel()
+			}
+			lg.cancel = nil
+			lg.steps = nil
+		}()
+		lg.runLoadSteps(ctx, steps)
+	}()
+
+	return steps, true
+}
+
+func (lg *LoadGenerator) StartCPULoad() {
+	lg.guard(lg.doStartCPULoad)()
+}
+
+func (lg *LoadGenerator) StartMemLoad() {
+	lg.guard(lg.doStartMemLoad)()
+}
+
+func (lg *LoadGenerator) StartCombinedLoad() {
+	lg.guard(lg.doStartCombinedLoad)()
+}
+
+func (lg *LoadGenerator) StartSineLoad() {
+	lg.guard(lg.doStartSineLoad)()
+}
+
+func (lg *LoadGenerator) guard(fn func(ctx context.Context)) func() {
+	return func() {
+		if !lg.isRunning.CompareAndSwap(0, 1) {
+			lg.logger.Warn().Msg("a load generator is already running, skipping")
+			return
+		}
+		defer lg.isRunning.Store(0)
+
+		var ctx context.Context
+		ctx, cancel := context.WithCancel(context.Background())
+		lg.mu.Lock()
+		lg.cancel = cancel
+		lg.mu.Unlock()
+
+		defer func() {
+			lg.mu.Lock()
+			defer lg.mu.Unlock()
+			if lg.cancel != nil {
+				lg.cancel()
+			}
+			lg.cancel = nil
+			lg.steps = nil
+		}()
+
+		fn(ctx)
+	}
+}
+
+func (lg *LoadGenerator) runLoadSteps(ctx context.Context, steps []LoadStep) {
+	lg.mu.Lock()
+	lg.steps = steps
+	lg.startTime = time.Now()
+	lg.mu.Unlock()
+
+	var data []byte
+	t0 := time.Now()
+	for i, step := range steps {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		lg.mu.Lock()
+		lg.stepIdx = i
+		lg.stepStart = time.Now()
+		lg.mu.Unlock()
+
+		logger := lg.logger.With().
+			Int("step.#", i).
+			Dur("elapsed", time.Since(t0).Round(100*time.Millisecond)).
+			Logger()
+
+		logger.Info().
+			Int("cpu", step.CPUPercent).
+			Int("mem", step.MemMB).
+			Dur("dur", step.Duration).
+			Msg("step starts")
+
+		// Clear old data first if it exists to avoid memory peaks during re-allocation
+		if data != nil {
+			data = nil
+			runtime.GC()
+			debug.FreeOSMemory()
+		}
+
+		if step.MemMB > 0 {
+			newData := make([]byte, step.MemMB*1024*1024)
+			for j := 0; j < len(newData); j += 4096 {
+				newData[j] = 1
+			}
+			data = newData
+		}
+
+		if step.CPUPercent > 0 {
+			lg.doBusyWork(ctx, step.Duration, step.CPUPercent)
+		} else {
+			t := time.NewTimer(step.Duration)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return
+			}
+		}
+	}
+}
+
+func (lg *LoadGenerator) GenerateRandomSchedule(seed uint64, duration time.Duration, types string) []LoadStep {
+	r := rand.New(rand.NewPCG(seed, seed))
+	var steps []LoadStep
+	totalDur := time.Duration(0)
+
+	if duration <= 0 {
+		duration = RandomLoadTotalDuration
+	}
+	hasCPU := strings.Contains(types, "cpu")
+	hasMem := strings.Contains(types, "mem")
+
+	type Phase int
+	const (
+		None Phase = iota
+		SustainedLoad
+		VaryingLoad
+		Idle
+	)
+
+	var prevPhase Phase
+	for totalDur < duration {
+		var currentPhase Phase
+		if prevPhase == None || prevPhase == Idle {
+			if r.Float64() < 0.5 {
+				currentPhase = SustainedLoad
+			} else {
+				currentPhase = VaryingLoad
+			}
+		} else {
+			if r.Float64() < 0.5 {
+				currentPhase = Idle
+			} else {
+				if prevPhase == SustainedLoad {
+					currentPhase = VaryingLoad
+				} else {
+					currentPhase = SustainedLoad
+				}
+			}
+		}
+		prevPhase = currentPhase
+
+		phaseDuration := time.Duration(5+r.IntN(10)) * time.Minute
+
+		if totalDur+phaseDuration > duration {
+			phaseDuration = duration - totalDur
+		}
+
+		switch currentPhase {
+		case SustainedLoad:
+			cpu := 0
+			if hasCPU {
+				cpu = 30 + r.IntN(max(1, MaxRandomLoadCPU-30))
+			}
+			mem := 0
+			if hasMem {
+				mem = r.IntN(MaxRandomLoadRAM + 1)
+			}
+			steps = append(steps, LoadStep{
+				CPUPercent: cpu,
+				MemMB:      mem,
+				Duration:   phaseDuration,
+			})
+			totalDur += phaseDuration
+
+		case VaryingLoad:
+			phaseEnd := totalDur + phaseDuration
+			for totalDur < phaseEnd {
+				stepDur := time.Duration(2+r.IntN(28)) * time.Second
+				if totalDur+stepDur > phaseEnd {
+					stepDur = phaseEnd - totalDur
+				}
+				cpu := 0
+				if hasCPU {
+					cpu = r.IntN(MaxRandomLoadCPU + 1)
+				}
+				mem := 0
+				if hasMem {
+					mem = r.IntN(MaxRandomLoadRAM + 1)
+				}
+				steps = append(steps, LoadStep{
+					CPUPercent: cpu,
+					MemMB:      mem,
+					Duration:   stepDur,
+				})
+				totalDur += stepDur
+			}
+
+		case Idle:
+			steps = append(steps, LoadStep{
+				Duration: phaseDuration,
+			})
+			totalDur += phaseDuration
+		}
+	}
+	return steps
+}
+
+func (lg *LoadGenerator) doStartCPULoad(ctx context.Context) {
+	testID := xid.New()
+	logger := lg.logger.With().Str("cpuload.id", testID.String()).Logger()
+	logger.Info().Msg("load test starts")
+	defer logger.Info().Msg("load test ended")
+
+	const normal = 6 * time.Minute
+	const burst = 30 * time.Second
+	const sleep = 6 * time.Minute
+	const shortSleep = 30 * time.Second
+	const longSleep = 10 * time.Minute
+
+	tests := []LoadStep{
+		{Duration: burst, CPUPercent: 90},
+		{Duration: shortSleep},
+		{Duration: burst, CPUPercent: 90},
+		{Duration: shortSleep},
+		{Duration: normal, CPUPercent: 10},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 20},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 30},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 40},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 50},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 60},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 70},
+		{Duration: sleep},
+		{Duration: burst, CPUPercent: 90},
+		{Duration: shortSleep},
+		{Duration: burst, CPUPercent: 90},
+		{Duration: sleep},
+		{Duration: normal, CPUPercent: 70},
+		{Duration: normal, CPUPercent: 50},
+		{Duration: normal, CPUPercent: 20},
+		{Duration: shortSleep},
+		{Duration: burst, CPUPercent: 90},
+		{Duration: longSleep},
+		{Duration: burst, CPUPercent: 90},
+		{Duration: longSleep},
+		{Duration: burst, CPUPercent: 90},
+		{Duration: sleep},
+		{Duration: burst, CPUPercent: 50},
+		{Duration: sleep},
+		{Duration: burst, CPUPercent: 80},
+		{Duration: sleep},
+		{Duration: burst, CPUPercent: 70},
+		{Duration: longSleep},
+	}
+
+	lg.runLoadSteps(ctx, tests)
+}
+
+func (lg *LoadGenerator) doStartMemLoad(ctx context.Context) {
+	testID := xid.New()
+	logger := lg.logger.With().Str("memload.id", testID.String()).Logger()
+	logger.Info().Msg("memload test starts")
+	defer logger.Info().Msg("memload test ended")
+
+	const short = 1 * time.Minute
+	const long = 5 * time.Minute
+
+	tests := []LoadStep{
+		{Duration: short, MemMB: 100},
+		{Duration: short, MemMB: 0},
+		{Duration: short, MemMB: 300},
+		{Duration: short, MemMB: 0},
+		{Duration: long, MemMB: 300},
+		{Duration: short, MemMB: 0},
+		{Duration: long, MemMB: 400},
+		{Duration: short, MemMB: 0},
+	}
+
+	lg.runLoadSteps(ctx, tests)
+}
+
+func (lg *LoadGenerator) doStartCombinedLoad(ctx context.Context) {
+	testID := xid.New()
+	logger := lg.logger.With().Str("combinedload.id", testID.String()).Logger()
+	logger.Info().Msg("combined load test starts")
+	defer logger.Info().Msg("combined load test ended")
+
+	tests := []LoadStep{
+		{Duration: 1 * time.Minute, CPUPercent: 50, MemMB: 256},
+		{Duration: 1 * time.Minute, CPUPercent: 10, MemMB: 512},
+		{Duration: 1 * time.Minute, CPUPercent: 90, MemMB: 128},
+		{Duration: 1 * time.Minute, CPUPercent: 0, MemMB: 0},
+	}
+
+	lg.runLoadSteps(ctx, tests)
+}
+
+func (lg *LoadGenerator) doStartSineLoad(ctx context.Context) {
+	testID := xid.New()
+	logger := lg.logger.With().Str("sineload.id", testID.String()).Logger()
+	logger.Info().Msg("sine wave load test starts")
+	defer logger.Info().Msg("sine wave load test ended")
+	const totalDuration = time.Hour
+	const cycleDuration = 10 * time.Minute
+	const stepDuration = 8 * time.Second
+	const numSteps = int(totalDuration / stepDuration)
+	const maxCPU = 80
+	const maxMem = 400
+
+	steps := make([]LoadStep, numSteps)
+	for i := 0; i < numSteps; i++ {
+		x := 2 * math.Pi * float64(time.Duration(i)*stepDuration) / float64(cycleDuration)
+		cpuSine := (math.Sin(x) + 1) / 2
+		cpu := int(cpuSine * maxCPU)
+		memSine := (math.Sin(x+math.Pi) + 1) / 2
+		mem := int(memSine * maxMem)
+		steps[i] = LoadStep{
+			Duration:   stepDuration,
+			CPUPercent: cpu,
+			MemMB:      mem,
+		}
+	}
+	lg.runLoadSteps(ctx, steps)
+}
+
+func (lg *LoadGenerator) doBusyWork(ctx context.Context, duration time.Duration, percentage int) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	percentage = max(0, min(100, percentage))
+	unitCycle := 100 * time.Millisecond
+	workTime := time.Duration(percentage) * unitCycle / 100
+	sleepTime := unitCycle - workTime
+	endTime := time.Now().Add(duration)
+	for time.Now().Before(endTime) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		startWork := time.Now()
+		for time.Since(startWork) < workTime {
+			// consume CPU
+		}
+		if sleepTime > 0 {
+			t := time.NewTimer(sleepTime)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return
+			}
+		}
+	}
+}
+
+func (lg *LoadGenerator) StatusHandler(w http.ResponseWriter, r *http.Request) {
+	isRunning, steps, stepIdx, startTime, stepStart := lg.GetStatus()
+
+	if !isRunning || len(steps) == 0 {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintln(w, "No load test is currently running.")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintln(w, "Currently Running Load Test Schedule")
+	fmt.Fprintf(w, "Started at: %s (%s ago)\n", startTime.Format("15:04:05"), time.Since(startTime).Round(time.Second))
+	fmt.Fprintln(w, "--------------------------------------------------------------------------------")
+	fmt.Fprintf(w, "%-4s | %-12s | %-20s | %-10s | %-5s | %-5s | %s\n", "Step", "Relative", "Wall Clock", "Duration", "CPU%", "MemMB", "Status")
+
+	relTime := time.Duration(0)
+	for i, step := range steps {
+		status := ""
+		if i < stepIdx {
+			status = "Completed"
+		} else if i == stepIdx {
+			status = fmt.Sprintf("RUNNING (%s elapsed)", time.Since(stepStart).Round(time.Second))
+		} else {
+			status = "Pending"
+		}
+
+		fmt.Fprintf(w, "%-4d | %-12s | %-20s | %-10s | %-5d | %-5d | %s\n",
+			i, relTime, startTime.Add(relTime).Format("15:04:05"), step.Duration, step.CPUPercent, step.MemMB, status)
+		relTime += step.Duration
+	}
+	fmt.Fprintln(w, "--------------------------------------------------------------------------------")
+}
+
+func (lg *LoadGenerator) AbortHandler(w http.ResponseWriter, r *http.Request) {
+	if lg.Abort() {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "Load test aborted")
+	} else {
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprintln(w, "No load test running")
+	}
+}
+
+func (lg *LoadGenerator) CPULoadHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	go lg.StartCPULoad()
+}
+
+func (lg *LoadGenerator) MemLoadHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	go lg.StartMemLoad()
+}
+
+func (lg *LoadGenerator) CombinedLoadHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	go lg.StartCombinedLoad()
+}
+
+func (lg *LoadGenerator) SineLoadHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	go lg.StartSineLoad()
+}
+
+func (lg *LoadGenerator) RandomLoadHandler(w http.ResponseWriter, r *http.Request) {
+	seed := rand.Uint64()
+	target := fmt.Sprintf("/load/seed/%d", seed)
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func (lg *LoadGenerator) SeedLoadHandler(w http.ResponseWriter, r *http.Request) {
+	seedStr := strings.TrimPrefix(r.URL.Path, "/load/seed/")
+	if seedStr == "" {
+		target := "/load/random"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+	seed, err := strconv.ParseUint(seedStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid seed", http.StatusBadRequest)
+		return
+	}
+
+	duration := RandomLoadTotalDuration
+	if dStr := r.URL.Query().Get("duration"); dStr != "" {
+		if d, err := time.ParseDuration(dStr); err == nil {
+			duration = d
+		}
+	}
+	types := r.URL.Query().Get("types")
+	if types == "" {
+		types = "cpu,mem"
+	}
+
+	steps, ok := lg.StartSchedule(seed, duration, types)
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	if !ok {
+		fmt.Fprintln(w, "\nWARNING: A load generator is already running. This schedule was NOT started.")
+		fmt.Fprintln(w, "--------------------------------------------------")
+	}
+	fmt.Fprintf(w, "Random Load Schedule (Seed: %d)\n", seed)
+	fmt.Fprintln(w, "--------------------------------------------------")
+	fmt.Fprintf(w, "%-4s | %-12s | %-20s | %-10s | %-5s | %-5s\n", "Step", "Relative", "Wall Clock", "Duration", "CPU%", "MemMB")
+
+	now := time.Now()
+	relTime := time.Duration(0)
+	for i, step := range steps {
+		fmt.Fprintf(w, "%-4d | %-12s | %-20s | %-10s | %-5d | %-5d\n",
+			i, relTime, now.Add(relTime).Format("15:04:05"), step.Duration, step.CPUPercent, step.MemMB)
+		relTime += step.Duration
+	}
+	fmt.Fprintln(w, "--------------------------------------------------")
+
+}

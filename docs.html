@@ -30,6 +30,19 @@
     <p>Everything is not always ok</p>
 
     <div class="endpoint">
+      <span class="url-line"><a href="/">/</a></span>
+      <div class="doc-section">
+        Returns the default troublemaker info page or a response from any of the internal views if configured.
+        <br>
+        Current Root View: <code>{{if .CurrentRootView}}/{{.CurrentRootView}}{{else}}default{{end}}</code>
+      </div>
+      <form action="/set-root-handler" method="POST" class="toolbox">
+        <input type="text" name="view" class="full-width" placeholder="e.g. status/200,404" value="{{.CurrentRootView}}">
+        <button type="submit">Set Root Handler</button>
+      </form>
+    </div>
+
+    <div class="endpoint">
       <span class="url-line"><a href="/info">/info</a></span>
       <div class="doc-section">
         Returns plain text diagnostic data including <code>GOMAXPROCS</code>, <code>NumCPU</code>, and <code>Build Settings</code>.
@@ -38,8 +51,15 @@
 
     <div class="endpoint">
       <span class="url-line"><a href="/logs">/logs</a></span>
-      <div class="doc-section">
+      <div class="url-description">
         Returns the last <code>log.size</code> lines of application logs in plain text.
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <span class="url-line"><a href="/status/200,200,200,200,200,201,404,404,500">/status/{codes}</a></span>
+      <div class="url-description">
+        Returns a random HTTP status from the provided comma-separated list of status codes.
       </div>
     </div>
 
@@ -88,91 +108,44 @@
       </div>
     </div>
 
-    <div id="load-status" class="endpoint" style="background: #f8f9fa; border-left: 4px solid #007bff;">
-      <span class="url-line"><a href="/load/status">Load Test Status
-        {{if .IsRunning}}
-          <span id="status-text" style="color: #dc3545;">RUNNING</span>
-        {{else}}
-          <span id="status-text" style="color: #28a745;">NOT RUNNING</span>
-        {{end}}
-      </a></span>
-      <div id="status-details" class="doc-section">
-        {{if .IsRunning}}
-          <p>Step <strong>{{.CurrentStep}}</strong> of <strong>{{.TotalSteps}}</strong></p>
-        {{else}}
-          No load test is currently active.
-        {{end}}
-      </div>
-      <div class="toolbox">
-        {{if .IsRunning}}
-          <button id="abort-btn" class="danger" onclick="abortLoad()">Abort Load Test</button>
-        {{end}}
-      </div>
-    </div>
-
-    <script>
-      async function abortLoad() {
-        if (!confirm('Abort running load test?')) return;
-        try {
-          const res = await fetch('/load/abort', { method: 'POST' });
-          if (res.ok) {
-            alert('Load test aborted');
-            window.location.reload();
-          } else {
-            const text = await res.text();
-            alert('Failed to abort: ' + text);
-          }
-        } catch (e) {
-          alert('Error: ' + e);
-        }
-      }
-    </script>
-
     <div class="endpoint">
-      <span class="url-line"><a href="/load/cpu">/load/cpu</a></span>
+      <span class="url-line">/load/</span>
       <div class="doc-section">
-        Starts the predefined cpu load pattern. Only a single load generator can run at one time.
+        Manage and generate system load. Only a single load generator can run at one time.
+        <table class="params-table">
+          <tr><th>Endpoint</th><th>Description</th></tr>
+          <tr><td><code><a href="/load/status">status</a></code></td><td>Returns current status and full schedule of the active load test.</td></tr>
+          <tr><td><code><a href="/load/abort">abort</a></code></td><td>Aborts any currently running load test.</td></tr>
+          <tr><td><code><a href="/load/cpu">cpu</a></code></td><td>Starts a predefined CPU load pattern.</td></tr>
+          <tr><td><code><a href="/load/mem">mem</a></code></td><td>Starts a predefined memory load pattern.</td></tr>
+          <tr><td><code><a href="/load/combined">combined</a></code></td><td>Starts a combined CPU and memory load pattern.</td></tr>
+          <tr><td><code><a href="/load/sine">sine</a></code></td><td>Starts a sine wave load pattern (CPU and memory 180&deg; phase shifted).</td></tr>
+          <tr><td><code><a href="/load/random">random</a></code></td><td>Generates a new random seed and redirects to <code>/load/seed/[seed]</code>.</td></tr>
+        </table>
       </div>
-    </div>
 
-    <div class="endpoint">
-      <span class="url-line"><a href="/load/mem">/load/mem</a></span>
       <div class="doc-section">
-        Starts the predefined memory load pattern. Only a single load generator can run at one time.
-      </div>
-    </div>
-
-    <div class="endpoint">
-      <span class="url-line"><a href="/load/combined">/load/combined</a></span>
-      <div class="doc-section">
-        Starts a combined cpu and memory load pattern. Only a single load generator can run at one time.
-      </div>
-    </div>
-
-    <div class="endpoint">
-      <span class="url-line"><a href="/load/random">/load/random</a></span>
-      <div class="doc-section">
-        Generates a new random seed and redirects to <code>/load/seed/[seed]</code>.
-      </div>
-    </div>
-
-    <div class="endpoint">
-      <span class="url-line"><a href="/load/seed/">/load/seed/[seed]</a></span>
-      <div class="doc-section">
+        <span class="url-line"><a href="/load/seed/">/load/seed/[seed]</a></span>
         Starts a reproducible random load schedule based on the provided <code>seed</code> (unsigned 64-bit integer).
         The schedule is always displayed, even if a load generator is already active.
-        Note that the schedule generation logic may change between versions, so seeds might not be stable over long periods.
         The test is constrained by the following limits:
         <ul>
           <li>Max CPU: <code>{{.RandomLoadMaxCPU}}%</code></li>
           <li>Max RAM: <code>{{.RandomLoadMaxRAM}}MB</code></li>
           <li>Total Duration: <code>{{.RandomLoadTotalDuration}}</code></li>
         </ul>
+        <table class="params-table">
+          <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>duration</code></td><td>Duration</td><td>{{.RandomLoadTotalDuration}}</td><td>How long the load test should run (e.g., <code>30m</code>, <code>2h</code>).</td></tr>
+          <tr><td><code>types</code></td><td>String</td><td><code>cpu,mem</code></td><td>Comma-separated list of load types to include (<code>cpu</code>, <code>mem</code>).</td></tr>
+        </table>
         The response contains the seed used and the full schedule of load steps.
       </div>
       <div class="toolbox">
         <input type="text" id="randomSeed" placeholder="Optional Seed">
-        <button onclick="run('/load/seed/' + v('randomSeed'))">Start/View Load Schedule</button>
+        <input type="text" id="randomDuration" value="{{.RandomLoadTotalDuration}}">
+        <input type="text" id="randomTypes" value="cpu,mem">
+        <button onclick="run('/load/seed/' + v('randomSeed') + '?duration=' + v('randomDuration') + '&types=' + v('randomTypes'))">Start/View Load Schedule</button>
       </div>
     </div>
 

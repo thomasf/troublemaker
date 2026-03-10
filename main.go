@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
-	"io"
 	"math/rand/v2"
 	"mime"
 	"net/http"
@@ -21,27 +20,20 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/peterbourgon/ff/v3"
 	"github.com/rs/xid"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	DefaultExitCode         = 1
-	DefaultSlowDuration     = 5 * time.Minute
-	DefaultSlowInterval     = 100 * time.Millisecond
-	DefaultNothingDuration  = 5 * time.Minute
-	MaxRandomLoadRAM        = 666               // MB
-	MaxRandomLoadCPU        = 90                // Percent
-	RandomLoadTotalDuration = 110 * time.Minute // Total test duration
+	DefaultExitCode        = 1
+	DefaultSlowDuration    = 5 * time.Minute
+	DefaultSlowInterval    = 100 * time.Millisecond
+	DefaultNothingDuration = 5 * time.Minute
 )
-
-var logger zerolog.Logger
 
 var (
 	startTime = time.Now().UTC()
@@ -49,123 +41,6 @@ var (
 )
 
 var instanceID = xid.New().String()
-
-type LogBuffer struct {
-	mu    sync.RWMutex
-	lines []string
-	size  int
-}
-
-func (lb *LogBuffer) Write(p []byte) (n int, err error) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	if lb.size <= 0 {
-		return len(p), nil
-	}
-	lb.lines = append(lb.lines, string(p))
-	if len(lb.lines) > lb.size {
-		lb.lines = lb.lines[len(lb.lines)-lb.size:]
-	}
-	return len(p), nil
-}
-
-func (lb *LogBuffer) WriteTo(w io.Writer) (int64, error) {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-	var total int64
-	for _, line := range lb.lines {
-		n, err := fmt.Fprint(w, line)
-		total += int64(n)
-		if err != nil {
-			return total, err
-		}
-	}
-	return total, nil
-}
-
-var logBuffer = &LogBuffer{}
-
-func init() {
-	consoleWriter := zerolog.ConsoleWriter{
-		Out:        os.Stderr,
-		TimeFormat: time.RFC3339Nano,
-	}
-
-	bufferWriter := zerolog.ConsoleWriter{
-		Out:        logBuffer,
-		TimeFormat: time.RFC3339Nano,
-		NoColor:    true,
-	}
-
-	multi := zerolog.MultiLevelWriter(consoleWriter, bufferWriter)
-
-	log.Logger = log.Output(multi)
-
-	logger = log.With().
-		Str("instance", instanceID).
-		Logger().
-		Hook(zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, message string) {
-			e.Str("t", time.Since(t0).String())
-		}))
-}
-
-func newLogsHandler() func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		logBuffer.WriteTo(w)
-	}
-}
-
-type loggingMiddlewareResponseWriter struct {
-	http.ResponseWriter
-	status      int
-	wroteHeader bool
-}
-
-func (rw *loggingMiddlewareResponseWriter) WriteHeader(code int) {
-	if rw.wroteHeader {
-		return
-	}
-	rw.status = code
-	rw.wroteHeader = true
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-func (rw *loggingMiddlewareResponseWriter) Write(p []byte) (int, error) {
-	if !rw.wroteHeader {
-		rw.WriteHeader(http.StatusOK)
-	}
-	return rw.ResponseWriter.Write(p)
-}
-
-func (rw *loggingMiddlewareResponseWriter) Unwrap() http.ResponseWriter {
-	return rw.ResponseWriter
-}
-
-var logIgnored = map[string]bool{
-	"/logs":        true,
-	"/favicon.ico": true,
-}
-
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rw := &loggingMiddlewareResponseWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rw, r)
-		if logIgnored[r.URL.Path] {
-			return
-		}
-		logger.Info().
-			Str("method", r.Method).
-			Str("path", r.URL.Path).
-			Int("status", rw.status).
-			Dur("duration", time.Since(start)).
-			Str("remote_addr", r.RemoteAddr).
-			Str("user_agent", r.UserAgent()).
-			Msg("http request")
-	})
-}
 
 func disableCachingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -247,6 +122,31 @@ func newCacheHandler() http.Handler {
 	})
 }
 
+func newStatusHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pathParts := strings.TrimPrefix(r.URL.Path, "/status/")
+		codes := strings.Split(pathParts, ",")
+		var validCodes []int
+		for _, c := range codes {
+			if code, err := strconv.Atoi(strings.TrimSpace(c)); err == nil && code >= 100 && code <= 599 {
+				validCodes = append(validCodes, code)
+			}
+		}
+
+		if len(validCodes) == 0 {
+			validCodes = []int{http.StatusOK}
+		}
+
+		selectedCode := validCodes[rand.IntN(len(validCodes))]
+
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(selectedCode)
+
+		fmt.Fprintf(w, "<html><body><h1>Status: %d</h1><p>Randomly selected from: %v</p><p>Time: %s</p></body></html>",
+			selectedCode, validCodes, time.Now().Format(time.RFC3339Nano))
+	})
+}
+
 func newInfoHandler(flags Flags, effectiveSettings EffectiveSettings) func(w http.ResponseWriter, r *http.Request) {
 	flagsData, err := json.MarshalIndent(flags, "", "  ")
 	if err != nil {
@@ -294,30 +194,78 @@ func newRootHandler() func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type rootHandler struct {
+	mu             sync.RWMutex
+	view           string
+	defaultHandler http.Handler
+	mux            *http.ServeMux
+}
+
+func (h *rootHandler) SetView(view string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.view = strings.TrimPrefix(view, "/")
+}
+
+func (h *rootHandler) GetView() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.view
+}
+
+func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	view := h.GetView()
+	if view == "" {
+		h.defaultHandler.ServeHTTP(w, r)
+		return
+	}
+
+	path, query, _ := strings.Cut(view, "?")
+	r.URL.Path = "/" + path
+	if query != "" {
+		if r.URL.RawQuery != "" {
+			r.URL.RawQuery = query + "&" + r.URL.RawQuery
+		} else {
+			r.URL.RawQuery = query
+		}
+	}
+	h.mux.ServeHTTP(w, r)
+}
+
+func newSetRootHandler(rh *rootHandler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		view := r.FormValue("view")
+		rh.SetView(view)
+		http.Redirect(w, r, "/docs", http.StatusFound)
+	})
+}
+
 //go:embed docs.html
 var docsData []byte
 
-func newDocsHandler(flags Flags, effective EffectiveSettings, usage string) func(w http.ResponseWriter, r *http.Request) {
-	flagsData, _ := json.MarshalIndent(flags, "", "  ")
-	effectiveData, _ := json.MarshalIndent(effective, "", "  ")
-
-	buildInfoStr := ""
-	buildInfo, ok := debug.ReadBuildInfo()
-	if ok {
-		buildInfoStr = buildInfo.String()
-	}
-
+func newDocsHandler(flags Flags, effective EffectiveSettings, usage string, rh *rootHandler) func(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.New("docs").Parse(string(docsData))
 	if err != nil {
 		panic(err)
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		loadMu.RLock()
-		isRunning := isRunningLoad.Load() == 1
-		currentStep := loadStepIdx
-		nSteps := len(loadSteps)
-		loadMu.RUnlock()
+		flagsData, _ := json.MarshalIndent(flags, "", "  ")
+		effectiveData, _ := json.MarshalIndent(effective, "", "  ")
+
+		buildInfoStr := ""
+		buildInfo, ok := debug.ReadBuildInfo()
+		if ok {
+			buildInfoStr = buildInfo.String()
+		}
 
 		data := struct {
 			Flags                   string
@@ -331,9 +279,7 @@ func newDocsHandler(flags Flags, effective EffectiveSettings, usage string) func
 			RandomLoadMaxRAM        int
 			RandomLoadMaxCPU        int
 			RandomLoadTotalDuration time.Duration
-			IsRunning               bool
-			CurrentStep             int
-			TotalSteps              int
+			CurrentRootView         string
 		}{
 			Flags:                   string(flagsData),
 			EffectiveSettings:       string(effectiveData),
@@ -346,9 +292,7 @@ func newDocsHandler(flags Flags, effective EffectiveSettings, usage string) func
 			RandomLoadMaxRAM:        MaxRandomLoadRAM,
 			RandomLoadMaxCPU:        MaxRandomLoadCPU,
 			RandomLoadTotalDuration: RandomLoadTotalDuration,
-			IsRunning:               isRunning,
-			CurrentStep:             currentStep + 1,
-			TotalSteps:              nSteps,
+			CurrentRootView:         rh.GetView(),
 		}
 
 		w.Header().Add("Content-Type", "text/html")
@@ -365,6 +309,7 @@ type Flags struct {
 	WebListen       string        `json:"web.listen"`
 	WebDelay        time.Duration `json:"web.delay"`
 	WebDelayJitter  time.Duration `json:"web.delay.jitter"`
+	WebRoot         string        `json:"web.root"`
 	ExitAfter       time.Duration `json:"exit.after"`
 	ExitAfterJitter time.Duration `json:"exit.after.jitter"`
 	ExitPercent     int           `json:"exit.percent"`
@@ -388,6 +333,7 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.StringVar(&f.WebListen, "web.listen", "0.0.0.0:8092", "http server bind addr")
 	fs.DurationVar(&f.WebDelay, "web.delay", 0, "sleep duration before starting http server")
 	fs.DurationVar(&f.WebDelayJitter, "web.delay.jitter", 0, "delay +/- jitter")
+	fs.StringVar(&f.WebRoot, "web.root", "", "handler to use for / (e.g. status/200,404)")
 
 	fs.DurationVar(&f.ExitAfter, "exit.after", 0, "exit with exit code 1 if duration > 0, 1ns=exit asap")
 	fs.DurationVar(&f.ExitAfterJitter, "exit.after.jitter", 0, "exit after +/- jitter")
@@ -434,58 +380,6 @@ type EffectiveSettings struct {
 	ShouldExit bool          `json:"should exit"`
 }
 
-func newLoadStatusHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		loadMu.RLock()
-		defer loadMu.RUnlock()
-
-		if isRunningLoad.Load() == 0 || len(loadSteps) == 0 {
-			w.Header().Set("Content-Type", "text/plain")
-			fmt.Fprintln(w, "No load test is currently running.")
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintln(w, "Currently Running Load Test Schedule")
-		fmt.Fprintf(w, "Started at: %s (%s ago)\n", loadStartTime.Format("15:04:05"), time.Since(loadStartTime).Round(time.Second))
-		fmt.Fprintln(w, "--------------------------------------------------------------------------------")
-		fmt.Fprintf(w, "%-4s | %-12s | %-20s | %-10s | %-5s | %-5s | %s\n", "Step", "Relative", "Wall Clock", "Duration", "CPU%", "MemMB", "Status")
-
-		relTime := time.Duration(0)
-		for i, step := range loadSteps {
-			status := ""
-			if i < loadStepIdx {
-				status = "Completed"
-			} else if i == loadStepIdx {
-				status = fmt.Sprintf("RUNNING (%s elapsed)", time.Since(loadStepStartTime).Round(time.Second))
-			} else {
-				status = "Pending"
-			}
-
-			fmt.Fprintf(w, "%-4d | %-12s | %-20s | %-10s | %-5d | %-5d | %s\n",
-				i, relTime, loadStartTime.Add(relTime).Format("15:04:05"), step.Duration, step.CPUPercent, step.MemMB, status)
-			relTime += step.Duration
-		}
-		fmt.Fprintln(w, "--------------------------------------------------------------------------------")
-	}
-}
-
-func newLoadAbortHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		loadMu.Lock()
-		if loadCancel != nil {
-			loadCancel()
-			loadCancel = nil
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, "Load test aborted")
-		} else {
-			w.WriteHeader(http.StatusConflict)
-			fmt.Fprintln(w, "No load test running")
-		}
-		loadMu.Unlock()
-	}
-}
-
 func main() {
 	logger.Info().Time("t0", startTime).Msg("started")
 	var flags Flags
@@ -503,8 +397,13 @@ func main() {
 		ff.WithConfigFileFlag("config"),
 		ff.WithConfigFileParser(ff.PlainParser),
 	); err != nil {
-		logger.Err(err).Msg("could not parse flags")
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+
 	}
 
 	logBuffer.mu.Lock()
@@ -566,89 +465,34 @@ func main() {
 		}
 	}
 
+	lg := NewLoadGenerator(logger)
+
 	if flags.WebEnable {
 		go func() {
 			mux := http.NewServeMux()
-			mux.HandleFunc("/", newRootHandler())
-			mux.HandleFunc("/docs", newDocsHandler(flags, effectiveSettings, usage))
+			rh := &rootHandler{
+				mux:            mux,
+				defaultHandler: http.HandlerFunc(newRootHandler()),
+			}
+			rh.SetView(flags.WebRoot)
+
+			mux.Handle("/", rh)
+			mux.HandleFunc("/docs", newDocsHandler(flags, effectiveSettings, usage, rh))
+			mux.Handle("/set-root-handler", newSetRootHandler(rh))
 			mux.HandleFunc("/info", newInfoHandler(flags, effectiveSettings))
 			mux.HandleFunc("/logs", newLogsHandler())
+			mux.Handle("/status/", newStatusHandler())
 			mux.Handle("/cache/", newCacheHandler())
 			mux.Handle("/set-headers/", newSetHeadersHandler())
 
-			mux.HandleFunc("/load/status", newLoadStatusHandler())
-			mux.HandleFunc("/load/abort", newLoadAbortHandler())
-			mux.HandleFunc("/load/cpu", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				go startCPULoad()
-			})
-			mux.HandleFunc("/load/mem", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				go startMemLoad()
-			})
-			mux.HandleFunc("/load/combined", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				go startCombinedLoad()
-			})
-			mux.HandleFunc("/load/random", func(w http.ResponseWriter, r *http.Request) {
-				seed := rand.Uint64()
-				http.Redirect(w, r, fmt.Sprintf("/load/seed/%d", seed), http.StatusFound)
-			})
-			mux.HandleFunc("/load/seed/", func(w http.ResponseWriter, r *http.Request) {
-				seedStr := strings.TrimPrefix(r.URL.Path, "/load/seed/")
-				if seedStr == "" {
-					http.Redirect(w, r, "/load/random", http.StatusFound)
-					return
-				}
-				seed, err := strconv.ParseUint(seedStr, 10, 64)
-				if err != nil {
-					http.Error(w, "invalid seed", http.StatusBadRequest)
-					return
-				}
-
-				steps := generateRandomSchedule(seed)
-
-				w.Header().Set("Content-Type", "text/plain")
-				w.WriteHeader(http.StatusOK)
-				fmt.Fprintf(w, "Random Load Schedule (Seed: %d)\n", seed)
-				fmt.Fprintln(w, "--------------------------------------------------")
-				fmt.Fprintf(w, "%-4s | %-12s | %-20s | %-10s | %-5s | %-5s\n", "Step", "Relative", "Wall Clock", "Duration", "CPU%", "MemMB")
-
-				now := time.Now()
-				relTime := time.Duration(0)
-				for i, step := range steps {
-					fmt.Fprintf(w, "%-4d | %-12s | %-20s | %-10s | %-5d | %-5d\n",
-						i, relTime, now.Add(relTime).Format("15:04:05"), step.Duration, step.CPUPercent, step.MemMB)
-					relTime += step.Duration
-				}
-				fmt.Fprintln(w, "--------------------------------------------------")
-
-				if !isRunningLoad.CompareAndSwap(0, 1) {
-					fmt.Fprintln(w, "\nWARNING: A load generator is already running. This schedule was NOT started.")
-					return
-				}
-
-				fmt.Fprintln(w, "\nSUCCESS: Load generator started with this schedule.")
-
-				loadMu.Lock()
-				ctx, cancel := context.WithCancel(context.Background())
-				loadCancel = cancel
-				loadMu.Unlock()
-
-				go func() {
-					defer isRunningLoad.Store(0)
-					defer func() {
-						loadMu.Lock()
-						if loadCancel != nil {
-							loadCancel()
-						}
-						loadCancel = nil
-						loadSteps = nil
-						loadMu.Unlock()
-					}()
-					runLoadSteps(ctx, logger, steps)
-				}()
-			})
+			mux.HandleFunc("/load/status", lg.StatusHandler)
+			mux.HandleFunc("/load/abort", lg.AbortHandler)
+			mux.HandleFunc("/load/cpu", lg.CPULoadHandler)
+			mux.HandleFunc("/load/mem", lg.MemLoadHandler)
+			mux.HandleFunc("/load/combined", lg.CombinedLoadHandler)
+			mux.HandleFunc("/load/sine", lg.SineLoadHandler)
+			mux.HandleFunc("/load/random", lg.RandomLoadHandler)
+			mux.HandleFunc("/load/seed/", lg.SeedLoadHandler)
 			mux.HandleFunc("/exit/", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				codeStr := r.URL.Query().Get("code")
@@ -751,332 +595,20 @@ func main() {
 		nWorkers := max(1, min(runtime.GOMAXPROCS(0), flags.CPULoadWorkers))
 		logger.Info().Int("workers", nWorkers).Msg("starting cpu load")
 		for range nWorkers {
-			go startCPULoad()
+			go lg.StartCPULoad()
 		}
 	}
 
 	if flags.MemloadEnable {
 		go func() {
 			time.Sleep(flags.MemloadWait)
-			startMemLoad()
+			lg.StartMemLoad()
 		}()
 	}
 	for {
 		time.Sleep(time.Second)
 	}
 }
-
-type LoadStep struct {
-	CPUPercent int           `json:"cpu_percent"`
-	MemMB      int           `json:"mem_mb"`
-	Duration   time.Duration `json:"duration"`
-}
-
-func runLoadSteps(ctx context.Context, l zerolog.Logger, steps []LoadStep) {
-	loadMu.Lock()
-	loadSteps = steps
-	loadStartTime = time.Now()
-	loadMu.Unlock()
-
-	var data []byte
-	t0 := time.Now()
-	for i, step := range steps {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		loadMu.Lock()
-		loadStepIdx = i
-		loadStepStartTime = time.Now()
-		loadMu.Unlock()
-
-		logger := l.With().
-			Int("step.#", i).
-			Dur("elapsed", time.Since(t0).Round(100*time.Millisecond)).
-			Logger()
-
-		logger.Info().
-			Int("cpu", step.CPUPercent).
-			Int("mem", step.MemMB).
-			Dur("dur", step.Duration).
-			Msg("step starts")
-
-		// Always clear old data first if it exists to avoid memory peaks during re-allocation
-		if data != nil {
-			data = nil
-			runtime.GC()
-			debug.FreeOSMemory()
-		}
-
-		if step.MemMB > 0 {
-			newData := make([]byte, step.MemMB*1024*1024)
-			for j := 0; j < len(newData); j += 4096 {
-				newData[j] = 1
-			}
-			data = newData
-		}
-
-		if step.CPUPercent > 0 {
-			doBusyWork(ctx, step.Duration, step.CPUPercent)
-		} else {
-			t := time.NewTimer(step.Duration)
-			select {
-			case <-t.C:
-			case <-ctx.Done():
-				t.Stop()
-				return
-			}
-		}
-	}
-}
-
-func generateRandomSchedule(seed uint64) []LoadStep {
-	r := rand.New(rand.NewPCG(seed, seed))
-	var steps []LoadStep
-	totalDur := time.Duration(0)
-
-	type Phase int
-	const (
-		None Phase = iota
-		SustainedLoad
-		VaryingLoad
-		Idle
-	)
-
-	var prevPhase Phase
-	for totalDur < RandomLoadTotalDuration {
-		var currentPhase Phase
-		if prevPhase == None || prevPhase == Idle {
-			if r.Float64() < 0.5 {
-				currentPhase = SustainedLoad
-			} else {
-				currentPhase = VaryingLoad
-			}
-		} else {
-			if r.Float64() < 0.5 {
-				currentPhase = Idle
-			} else {
-				if prevPhase == SustainedLoad {
-					currentPhase = VaryingLoad
-				} else {
-					currentPhase = SustainedLoad
-				}
-			}
-		}
-		prevPhase = currentPhase
-
-		phaseDuration := time.Duration(5+r.IntN(10)) * time.Minute
-
-		if totalDur+phaseDuration > RandomLoadTotalDuration {
-			phaseDuration = RandomLoadTotalDuration - totalDur
-		}
-
-		switch currentPhase {
-		case SustainedLoad:
-			cpu := 30 + r.IntN(max(1, MaxRandomLoadCPU-30))
-			mem := r.IntN(MaxRandomLoadRAM + 1)
-			steps = append(steps, LoadStep{
-				CPUPercent: cpu,
-				MemMB:      mem,
-				Duration:   phaseDuration,
-			})
-			totalDur += phaseDuration
-
-		case VaryingLoad:
-			phaseEnd := totalDur + phaseDuration
-			for totalDur < phaseEnd {
-				stepDur := time.Duration(2+r.IntN(28)) * time.Second
-				if totalDur+stepDur > phaseEnd {
-					stepDur = phaseEnd - totalDur
-				}
-				steps = append(steps, LoadStep{
-					CPUPercent: r.IntN(MaxRandomLoadCPU + 1),
-					MemMB:      r.IntN(MaxRandomLoadRAM + 1),
-					Duration:   stepDur,
-				})
-				totalDur += stepDur
-			}
-
-		case Idle:
-			steps = append(steps, LoadStep{
-				Duration: phaseDuration,
-			})
-			totalDur += phaseDuration
-		}
-	}
-	return steps
-}
-
-func doStartCPULoad(ctx context.Context) {
-	testID := xid.New()
-	logger := logger.With().Str("cpuload.id", testID.String()).Logger()
-	logger.Info().Msg("load test starts")
-	defer logger.Info().Msg("load test ended")
-
-	const normal = 6 * time.Minute
-	const burst = 30 * time.Second
-	const sleep = 6 * time.Minute
-	const shortSleep = 30 * time.Second
-	const longSleep = 10 * time.Minute
-
-	tests := []LoadStep{
-		{Duration: burst, CPUPercent: 90},
-		{Duration: shortSleep},
-		{Duration: burst, CPUPercent: 90},
-		{Duration: shortSleep},
-		{Duration: normal, CPUPercent: 10},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 20},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 30},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 40},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 50},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 60},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 70},
-		{Duration: sleep},
-		{Duration: burst, CPUPercent: 90},
-		{Duration: shortSleep},
-		{Duration: burst, CPUPercent: 90},
-		{Duration: sleep},
-		{Duration: normal, CPUPercent: 70},
-		{Duration: normal, CPUPercent: 50},
-		{Duration: normal, CPUPercent: 20},
-		{Duration: shortSleep},
-		{Duration: burst, CPUPercent: 90},
-		{Duration: longSleep},
-		{Duration: burst, CPUPercent: 90},
-		{Duration: longSleep},
-		{Duration: burst, CPUPercent: 90},
-		{Duration: sleep},
-		{Duration: burst, CPUPercent: 50},
-		{Duration: sleep},
-		{Duration: burst, CPUPercent: 80},
-		{Duration: sleep},
-		{Duration: burst, CPUPercent: 70},
-		{Duration: longSleep},
-	}
-
-	runLoadSteps(ctx, logger, tests)
-}
-
-func doStartMemLoad(ctx context.Context) {
-	testID := xid.New()
-	logger := logger.With().Str("memload.id", testID.String()).Logger()
-	logger.Info().Msg("memload test starts")
-	defer logger.Info().Msg("memload test ended")
-
-	const short = 1 * time.Minute
-	const long = 5 * time.Minute
-
-	tests := []LoadStep{
-		{Duration: short, MemMB: 100},
-		{Duration: short, MemMB: 0},
-		{Duration: short, MemMB: 300},
-		{Duration: short, MemMB: 0},
-		{Duration: long, MemMB: 300},
-		{Duration: short, MemMB: 0},
-		{Duration: long, MemMB: 400},
-		{Duration: short, MemMB: 0},
-	}
-
-	runLoadSteps(ctx, logger, tests)
-}
-
-func doStartCombinedLoad(ctx context.Context) {
-	testID := xid.New()
-	logger := logger.With().Str("combinedload.id", testID.String()).Logger()
-	logger.Info().Msg("combined load test starts")
-	defer logger.Info().Msg("combined load test ended")
-
-	tests := []LoadStep{
-		{Duration: 1 * time.Minute, CPUPercent: 50, MemMB: 256},
-		{Duration: 1 * time.Minute, CPUPercent: 10, MemMB: 512},
-		{Duration: 1 * time.Minute, CPUPercent: 90, MemMB: 128},
-		{Duration: 1 * time.Minute, CPUPercent: 0, MemMB: 0},
-	}
-
-	runLoadSteps(ctx, logger, tests)
-}
-
-func doBusyWork(ctx context.Context, duration time.Duration, percentage int) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	percentage = max(0, min(100, percentage))
-	unitCycle := 100 * time.Millisecond
-	workTime := time.Duration(percentage) * unitCycle / 100
-	sleepTime := unitCycle - workTime
-	endTime := time.Now().Add(duration)
-	for time.Now().Before(endTime) {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		startWork := time.Now()
-		for time.Since(startWork) < workTime {
-			// consume CPU
-		}
-		if sleepTime > 0 {
-			t := time.NewTimer(sleepTime)
-			select {
-			case <-t.C:
-			case <-ctx.Done():
-				t.Stop()
-				return
-			}
-		}
-	}
-}
-
-var isRunningLoad atomic.Int32
-
-var (
-	loadMu            sync.RWMutex
-	loadCancel        context.CancelFunc
-	loadSteps         []LoadStep
-	loadStepIdx       int
-	loadStartTime     time.Time
-	loadStepStartTime time.Time
-)
-
-func Guard(fn func(ctx context.Context)) func() {
-	return func() {
-		if !isRunningLoad.CompareAndSwap(0, 1) {
-			logger.Warn().Msg("a load generator is already running, skipping")
-			return
-		}
-		defer isRunningLoad.Store(0)
-
-		var ctx context.Context
-		loadMu.Lock()
-		ctx, loadCancel = context.WithCancel(context.Background())
-		loadMu.Unlock()
-
-		defer func() {
-			loadMu.Lock()
-			if loadCancel != nil {
-				loadCancel()
-			}
-			loadCancel = nil
-			loadSteps = nil
-			loadMu.Unlock()
-		}()
-
-		fn(ctx)
-	}
-}
-
-var (
-	startCPULoad      = Guard(doStartCPULoad)
-	startMemLoad      = Guard(doStartMemLoad)
-	startCombinedLoad = Guard(doStartCombinedLoad)
-)
 
 func GetSmiley() string {
 	const (
