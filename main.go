@@ -709,18 +709,21 @@ func runLoadSteps(l zerolog.Logger, steps []LoadStep) {
 			Dur("dur", step.Duration).
 			Msg("step starts")
 
+		// Always clear old data first if it exists to avoid memory peaks during re-allocation
+		if data != nil {
+			data = nil
+			runtime.GC()
+			debug.FreeOSMemory()
+		}
+
 		if step.MemMB > 0 {
 			newData := make([]byte, step.MemMB*1024*1024)
 			for j := 0; j < len(newData); j += 4096 {
 				newData[j] = 1
 			}
 			data = newData
-		} else {
-			if data != nil {
-				data = nil
-				runtime.GC()
-			}
 		}
+
 		if step.CPUPercent > 0 {
 			doBusyWork(step.Duration, step.CPUPercent)
 		} else {
