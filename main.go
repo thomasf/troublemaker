@@ -276,8 +276,8 @@ func newDocsHandler(flags Flags, effective EffectiveSettings, usage string, rh *
 			DefaultSlowDuration     time.Duration
 			DefaultSlowInterval     time.Duration
 			DefaultNothingDuration  time.Duration
-			RandomLoadMaxRAM        int
-			RandomLoadMaxCPU        int
+			LoadMemMax              int
+			LoadCPUMax              int
 			RandomLoadTotalDuration time.Duration
 			CurrentRootView         string
 		}{
@@ -289,8 +289,8 @@ func newDocsHandler(flags Flags, effective EffectiveSettings, usage string, rh *
 			DefaultSlowDuration:     DefaultSlowDuration,
 			DefaultSlowInterval:     DefaultSlowInterval,
 			DefaultNothingDuration:  DefaultNothingDuration,
-			RandomLoadMaxRAM:        MaxRandomLoadRAM,
-			RandomLoadMaxCPU:        MaxRandomLoadCPU,
+			LoadMemMax:              flags.LoadMemMax,
+			LoadCPUMax:              flags.LoadCPUMax,
 			RandomLoadTotalDuration: RandomLoadTotalDuration,
 			CurrentRootView:         rh.GetView(),
 		}
@@ -315,15 +315,13 @@ type Flags struct {
 	ExitPercent     int           `json:"exit.percent"`
 	ExitCode        int           `json:"exit.code"`
 	IgnoreSignals   bool          `json:"ignore.signals"`
-	CPUloadEnable   bool          `json:"cpuload.enable"`
-	CPULoadWorkers  int           `json:"cpuload.workers"`
-	CPULoadDuration time.Duration `json:"cpuload.duration"`
+	LoadEnable      bool          `json:"load.enable"`
+	LoadType        string        `json:"load.type"`
+	LoadCPUMax      int           `json:"load.cpu.max"`
+	LoadMemMax      int           `json:"load.mem.max"`
 
-	MemloadEnable bool          `json:"memload.enable"`
-	MemloadMB     int           `json:"memload.mb"`
-	MemloadWait   time.Duration `json:"memload.wait"`
-
-	LogSize int `json:"log.size"`
+	LoadWait time.Duration `json:"load.wait"`
+	LogSize  int           `json:"log.size"`
 
 	RandSeed uint64 `json:"rand.seed1"`
 }
@@ -343,12 +341,11 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 
 	fs.BoolVar(&f.IgnoreSignals, "signals.ignore", false, "ignore shutdown signals")
 
-	fs.BoolVar(&f.CPUloadEnable, "cpuload.enable", false, "enable cpu load generator")
-	fs.IntVar(&f.CPULoadWorkers, "cpuload.workers", 1, "number of concurrent goroutines, won't go over max")
-
-	fs.BoolVar(&f.MemloadEnable, "memload.enable", false, "enable memory load generator")
-	fs.IntVar(&f.MemloadMB, "memload.mb", 100, "memory to allocate in MB")
-	fs.DurationVar(&f.MemloadWait, "memload.wait", 0, "wait duration before starting memory load")
+	fs.BoolVar(&f.LoadEnable, "load.enable", false, "enable load generator at startup")
+	fs.StringVar(&f.LoadType, "load.type", "random", "type of load to generate (cpu, mem, combined, sine, random)")
+	fs.IntVar(&f.LoadCPUMax, "load.cpu.max", 85, "maximum cpu load in percent")
+	fs.IntVar(&f.LoadMemMax, "load.mem.max", 666, "maximum memory load in MB")
+	fs.DurationVar(&f.LoadWait, "load.wait", 0, "wait duration before starting load")
 
 	fs.IntVar(&f.LogSize, "log.size", 10000, "number of log lines to keep in memory")
 
@@ -466,6 +463,8 @@ func main() {
 	}
 
 	lg := NewLoadGenerator(logger)
+	lg.CPUMax = flags.LoadCPUMax
+	lg.MemMax = flags.LoadMemMax
 
 	if flags.WebEnable {
 		go func() {
@@ -591,20 +590,33 @@ func main() {
 		}()
 	}
 
-	if flags.CPUloadEnable {
-		nWorkers := max(1, min(runtime.GOMAXPROCS(0), flags.CPULoadWorkers))
-		logger.Info().Int("workers", nWorkers).Msg("starting cpu load")
-		for range nWorkers {
-			go lg.StartCPULoad()
-		}
-	}
-
-	if flags.MemloadEnable {
+	if flags.LoadEnable {
 		go func() {
-			time.Sleep(flags.MemloadWait)
-			lg.StartMemLoad()
+			if flags.LoadWait > 0 {
+				time.Sleep(flags.LoadWait)
+			}
+			switch strings.ToLower(flags.LoadType) {
+			case "cpu":
+				logger.Info().Msg("starting cpu load")
+				lg.StartCPULoad()
+			case "mem":
+				logger.Info().Msg("starting mem load")
+				lg.StartMemLoad()
+			case "mem+cpu", "combined":
+				logger.Info().Msg("starting combined load")
+				lg.StartCombinedLoad()
+			case "sine":
+				logger.Info().Msg("starting sine load")
+				lg.StartSineLoad()
+			case "random":
+				logger.Info().Msg("starting random load")
+				lg.StartSchedule(flags.RandSeed, 0, "cpu,mem")
+			default:
+				logger.Warn().Str("type", flags.LoadType).Msg("unknown load type")
+			}
 		}()
 	}
+
 	for {
 		time.Sleep(time.Second)
 	}

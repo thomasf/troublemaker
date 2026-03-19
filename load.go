@@ -19,8 +19,6 @@ import (
 )
 
 const (
-	MaxRandomLoadRAM        = 666              // MB
-	MaxRandomLoadCPU        = 90               // Percent
 	RandomLoadTotalDuration = 40 * time.Minute // Total test duration
 )
 
@@ -39,11 +37,16 @@ type LoadGenerator struct {
 	startTime time.Time
 	stepStart time.Time
 	logger    zerolog.Logger
+
+	CPUMax int
+	MemMax int
 }
 
 func NewLoadGenerator(logger zerolog.Logger) *LoadGenerator {
 	return &LoadGenerator{
 		logger: logger,
+		CPUMax: 80,
+		MemMax: 512,
 	}
 }
 
@@ -70,74 +73,62 @@ func (lg *LoadGenerator) Abort() bool {
 
 func (lg *LoadGenerator) StartSchedule(seed uint64, duration time.Duration, types string) ([]LoadStep, bool) {
 	steps := lg.GenerateRandomSchedule(seed, duration, types)
-	if !lg.isRunning.CompareAndSwap(0, 1) {
-		return steps, false
-	}
 
+	started := make(chan bool)
+	go func() {
+		ok := lg.guard(func(ctx context.Context) {
+			started <- true
+			lg.runLoadSteps(ctx, steps)
+		})
+		if !ok {
+			started <- false
+		}
+	}()
+
+	return steps, <-started
+}
+
+func (lg *LoadGenerator) StartCPULoad() {
+	lg.guard(lg.doStartCPULoad)
+}
+
+func (lg *LoadGenerator) StartMemLoad() {
+	lg.guard(lg.doStartMemLoad)
+}
+
+func (lg *LoadGenerator) StartCombinedLoad() {
+	lg.guard(lg.doStartCombinedLoad)
+}
+
+func (lg *LoadGenerator) StartSineLoad() {
+	lg.guard(lg.doStartSineLoad)
+}
+
+func (lg *LoadGenerator) guard(fn func(ctx context.Context)) bool {
+	if !lg.isRunning.CompareAndSwap(0, 1) {
+		lg.logger.Warn().Msg("a load generator is already running, skipping")
+		return false
+	}
+	defer lg.isRunning.Store(0)
+
+	var ctx context.Context
 	ctx, cancel := context.WithCancel(context.Background())
 	lg.mu.Lock()
 	lg.cancel = cancel
 	lg.mu.Unlock()
 
-	go func() {
-		defer lg.isRunning.Store(0)
-		defer func() {
-			lg.mu.Lock()
-			defer lg.mu.Unlock()
-			if lg.cancel != nil {
-				lg.cancel()
-			}
-			lg.cancel = nil
-			lg.steps = nil
-		}()
-		lg.runLoadSteps(ctx, steps)
+	defer func() {
+		lg.mu.Lock()
+		defer lg.mu.Unlock()
+		if lg.cancel != nil {
+			lg.cancel()
+		}
+		lg.cancel = nil
+		lg.steps = nil
 	}()
 
-	return steps, true
-}
-
-func (lg *LoadGenerator) StartCPULoad() {
-	lg.guard(lg.doStartCPULoad)()
-}
-
-func (lg *LoadGenerator) StartMemLoad() {
-	lg.guard(lg.doStartMemLoad)()
-}
-
-func (lg *LoadGenerator) StartCombinedLoad() {
-	lg.guard(lg.doStartCombinedLoad)()
-}
-
-func (lg *LoadGenerator) StartSineLoad() {
-	lg.guard(lg.doStartSineLoad)()
-}
-
-func (lg *LoadGenerator) guard(fn func(ctx context.Context)) func() {
-	return func() {
-		if !lg.isRunning.CompareAndSwap(0, 1) {
-			lg.logger.Warn().Msg("a load generator is already running, skipping")
-			return
-		}
-		defer lg.isRunning.Store(0)
-
-		var ctx context.Context
-		ctx, cancel := context.WithCancel(context.Background())
-		lg.mu.Lock()
-		lg.cancel = cancel
-		lg.mu.Unlock()
-
-		defer func() {
-			lg.mu.Lock()
-			defer lg.mu.Unlock()
-			if lg.cancel != nil {
-				lg.cancel()
-			}
-			lg.cancel = nil
-			lg.steps = nil
-		}()
-
-		fn(ctx)
-	}
+	fn(ctx)
+	return true
 }
 
 func (lg *LoadGenerator) runLoadSteps(ctx context.Context, steps []LoadStep) {
@@ -251,11 +242,11 @@ func (lg *LoadGenerator) GenerateRandomSchedule(seed uint64, duration time.Durat
 		case SustainedLoad:
 			cpu := 0
 			if hasCPU {
-				cpu = 30 + r.IntN(max(1, MaxRandomLoadCPU-30))
+				cpu = 30 + r.IntN(max(1, lg.CPUMax-30))
 			}
 			mem := 0
 			if hasMem {
-				mem = r.IntN(MaxRandomLoadRAM + 1)
+				mem = r.IntN(lg.MemMax + 1)
 			}
 			steps = append(steps, LoadStep{
 				CPUPercent: cpu,
@@ -273,11 +264,11 @@ func (lg *LoadGenerator) GenerateRandomSchedule(seed uint64, duration time.Durat
 				}
 				cpu := 0
 				if hasCPU {
-					cpu = r.IntN(MaxRandomLoadCPU + 1)
+					cpu = r.IntN(lg.CPUMax + 1)
 				}
 				mem := 0
 				if hasMem {
-					mem = r.IntN(MaxRandomLoadRAM + 1)
+					mem = r.IntN(lg.MemMax + 1)
 				}
 				steps = append(steps, LoadStep{
 					CPUPercent: cpu,
@@ -309,44 +300,48 @@ func (lg *LoadGenerator) doStartCPULoad(ctx context.Context) {
 	const shortSleep = 30 * time.Second
 	const longSleep = 10 * time.Minute
 
+	cp := func(percent int) int {
+		return int(float64(percent) / 90.0 * float64(lg.CPUMax))
+	}
+
 	tests := []LoadStep{
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: shortSleep},
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: shortSleep},
-		{Duration: normal, CPUPercent: 10},
+		{Duration: normal, CPUPercent: cp(10)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 20},
+		{Duration: normal, CPUPercent: cp(20)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 30},
+		{Duration: normal, CPUPercent: cp(30)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 40},
+		{Duration: normal, CPUPercent: cp(40)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 50},
+		{Duration: normal, CPUPercent: cp(50)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 60},
+		{Duration: normal, CPUPercent: cp(60)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 70},
+		{Duration: normal, CPUPercent: cp(70)},
 		{Duration: sleep},
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: shortSleep},
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: sleep},
-		{Duration: normal, CPUPercent: 70},
-		{Duration: normal, CPUPercent: 50},
-		{Duration: normal, CPUPercent: 20},
+		{Duration: normal, CPUPercent: cp(70)},
+		{Duration: normal, CPUPercent: cp(50)},
+		{Duration: normal, CPUPercent: cp(20)},
 		{Duration: shortSleep},
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: longSleep},
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: longSleep},
-		{Duration: burst, CPUPercent: 90},
+		{Duration: burst, CPUPercent: cp(90)},
 		{Duration: sleep},
-		{Duration: burst, CPUPercent: 50},
+		{Duration: burst, CPUPercent: cp(50)},
 		{Duration: sleep},
-		{Duration: burst, CPUPercent: 80},
+		{Duration: burst, CPUPercent: cp(80)},
 		{Duration: sleep},
-		{Duration: burst, CPUPercent: 70},
+		{Duration: burst, CPUPercent: cp(70)},
 		{Duration: longSleep},
 	}
 
@@ -362,14 +357,18 @@ func (lg *LoadGenerator) doStartMemLoad(ctx context.Context) {
 	const short = 1 * time.Minute
 	const long = 5 * time.Minute
 
+	mp := func(m int) int {
+		return int(float64(min(100, m)) / 100.0 * float64(lg.MemMax))
+	}
+
 	tests := []LoadStep{
-		{Duration: short, MemMB: 100},
+		{Duration: short, MemMB: mp(25)},
 		{Duration: short, MemMB: 0},
-		{Duration: short, MemMB: 300},
+		{Duration: short, MemMB: mp(75)},
 		{Duration: short, MemMB: 0},
-		{Duration: long, MemMB: 300},
+		{Duration: long, MemMB: mp(75)},
 		{Duration: short, MemMB: 0},
-		{Duration: long, MemMB: 400},
+		{Duration: long, MemMB: mp(100)},
 		{Duration: short, MemMB: 0},
 	}
 
@@ -382,10 +381,17 @@ func (lg *LoadGenerator) doStartCombinedLoad(ctx context.Context) {
 	logger.Info().Msg("combined load test starts")
 	defer logger.Info().Msg("combined load test ended")
 
+	mp := func(m int) int {
+		return int(float64(min(100, m)) / 100.0 * float64(lg.MemMax))
+	}
+	cp := func(c int) int {
+		return int(float64(min(100, c)) / 100.0 * float64(lg.CPUMax))
+	}
+
 	tests := []LoadStep{
-		{Duration: 1 * time.Minute, CPUPercent: 50, MemMB: 256},
-		{Duration: 1 * time.Minute, CPUPercent: 10, MemMB: 512},
-		{Duration: 1 * time.Minute, CPUPercent: 90, MemMB: 128},
+		{Duration: 1 * time.Minute, CPUPercent: cp(50), MemMB: mp(50)},
+		{Duration: 1 * time.Minute, CPUPercent: cp(10), MemMB: mp(100)},
+		{Duration: 1 * time.Minute, CPUPercent: cp(90), MemMB: mp(25)},
 		{Duration: 1 * time.Minute, CPUPercent: 0, MemMB: 0},
 	}
 
@@ -399,18 +405,16 @@ func (lg *LoadGenerator) doStartSineLoad(ctx context.Context) {
 	defer logger.Info().Msg("sine wave load test ended")
 	const totalDuration = time.Hour
 	const cycleDuration = 10 * time.Minute
-	const stepDuration = 8 * time.Second
+	const stepDuration = 4 * time.Second
 	const numSteps = int(totalDuration / stepDuration)
-	const maxCPU = 80
-	const maxMem = 400
 
 	steps := make([]LoadStep, numSteps)
 	for i := 0; i < numSteps; i++ {
 		x := 2 * math.Pi * float64(time.Duration(i)*stepDuration) / float64(cycleDuration)
 		cpuSine := (math.Sin(x) + 1) / 2
-		cpu := int(cpuSine * maxCPU)
+		cpu := int(cpuSine * float64(lg.CPUMax))
 		memSine := (math.Sin(x+math.Pi) + 1) / 2
-		mem := int(memSine * maxMem)
+		mem := int(memSine * float64(lg.MemMax))
 		steps[i] = LoadStep{
 			Duration:   stepDuration,
 			CPUPercent: cpu,
@@ -569,5 +573,4 @@ func (lg *LoadGenerator) SeedLoadHandler(w http.ResponseWriter, r *http.Request)
 		relTime += step.Duration
 	}
 	fmt.Fprintln(w, "--------------------------------------------------")
-
 }
