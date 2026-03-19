@@ -104,6 +104,10 @@ func (lg *LoadGenerator) StartSineLoad() {
 	lg.guard(lg.doStartSineLoad)
 }
 
+func (lg *LoadGenerator) StartSpikeLoad() {
+	lg.guard(lg.doStartSpikeLoad)
+}
+
 func (lg *LoadGenerator) guard(fn func(ctx context.Context)) bool {
 	if !lg.isRunning.CompareAndSwap(0, 1) {
 		lg.logger.Warn().Msg("a load generator is already running, skipping")
@@ -409,7 +413,7 @@ func (lg *LoadGenerator) doStartSineLoad(ctx context.Context) {
 	const numSteps = int(totalDuration / stepDuration)
 
 	steps := make([]LoadStep, numSteps)
-	for i := 0; i < numSteps; i++ {
+	for i := range numSteps {
 		x := 2 * math.Pi * float64(time.Duration(i)*stepDuration) / float64(cycleDuration)
 		cpuSine := (math.Sin(x) + 1) / 2
 		cpu := int(cpuSine * float64(lg.CPUMax))
@@ -421,6 +425,44 @@ func (lg *LoadGenerator) doStartSineLoad(ctx context.Context) {
 			MemMB:      mem,
 		}
 	}
+	lg.runLoadSteps(ctx, steps)
+}
+
+func (lg *LoadGenerator) doStartSpikeLoad(ctx context.Context) {
+	testID := xid.New()
+	logger := lg.logger.With().Str("spikeload.id", testID.String()).Logger()
+	logger.Info().Msg("spike load test starts")
+	defer logger.Info().Msg("spike load test ended")
+
+	r := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano())))
+	const totalDuration = time.Hour
+	var steps []LoadStep
+	var currentDur time.Duration
+
+	for currentDur < totalDuration {
+		// Idle period: 1 to 5 minutes
+		idleDur := time.Duration(60+r.IntN(240)) * time.Second
+		if currentDur+idleDur > totalDuration {
+			idleDur = totalDuration - currentDur
+		}
+		steps = append(steps, LoadStep{Duration: idleDur})
+		currentDur += idleDur
+
+		if currentDur >= totalDuration {
+			break
+		}
+
+		// Spike period: 5 to 15 seconds
+		spikeDur := time.Duration(5+r.IntN(11)) * time.Second
+		if currentDur+spikeDur > totalDuration {
+			spikeDur = totalDuration - currentDur
+		}
+		cpu := 80 + r.IntN(21) // 80-100%
+		cpu = min(cpu, lg.CPUMax)
+		steps = append(steps, LoadStep{Duration: spikeDur, CPUPercent: cpu})
+		currentDur += spikeDur
+	}
+
 	lg.runLoadSteps(ctx, steps)
 }
 
@@ -515,6 +557,11 @@ func (lg *LoadGenerator) CombinedLoadHandler(w http.ResponseWriter, r *http.Requ
 func (lg *LoadGenerator) SineLoadHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	go lg.StartSineLoad()
+}
+
+func (lg *LoadGenerator) SpikeLoadHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	go lg.StartSpikeLoad()
 }
 
 func (lg *LoadGenerator) RandomLoadHandler(w http.ResponseWriter, r *http.Request) {
