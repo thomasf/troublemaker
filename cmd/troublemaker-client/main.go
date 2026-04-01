@@ -288,7 +288,7 @@ func runSlow(ctx context.Context, baseURL, pattern string, concurrency int, prog
 			time.Since(t0).Round(time.Second), i+1, len(steps),
 			step.ResponseDuration, step.RequestInterval, step.StepDuration)
 
-		endpoint := fmt.Sprintf("%s/slow?duration=%s", baseURL, step.ResponseDuration)
+		endpoint := fmt.Sprintf("%s/slow?duration=%s&interval=1s", baseURL, step.ResponseDuration)
 		client := &http.Client{Timeout: step.ResponseDuration + 30*time.Second}
 
 		stepCtx, stepCancel := context.WithTimeout(ctx, step.StepDuration)
