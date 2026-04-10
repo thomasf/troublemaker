@@ -23,6 +23,9 @@ import (
 	"syscall"
 	"time"
 
+	"net/http/pprof"
+
+	"github.com/arl/statsviz"
 	"github.com/peterbourgon/ff/v3"
 	"github.com/rs/xid"
 	"github.com/rs/zerolog/log"
@@ -323,6 +326,9 @@ type Flags struct {
 	LoadWait time.Duration `json:"load.wait"`
 	LogSize  int           `json:"log.size"`
 
+	StatsVizEnable bool `json:"statsviz.enable"`
+	PprofEnable    bool `json:"pprof.enable"`
+
 	RandSeed uint64 `json:"rand.seed1"`
 }
 
@@ -348,6 +354,9 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.DurationVar(&f.LoadWait, "load.wait", 0, "wait duration before starting load")
 
 	fs.IntVar(&f.LogSize, "log.size", 10000, "number of log lines to keep in memory")
+
+	fs.BoolVar(&f.StatsVizEnable, "statsviz.enable", true, "enable statsviz at /debug/statsviz/")
+	fs.BoolVar(&f.PprofEnable, "pprof.enable", false, "enable pprof at /debug/pprof/")
 
 	fs.Uint64Var(&f.RandSeed, "rand.seed", rand.Uint64(), "seed for random generator")
 }
@@ -491,6 +500,20 @@ func main() {
 			mux.Handle("/cache/", newCacheHandler())
 			mux.Handle("/set-headers/", newSetHeadersHandler())
 
+			if flags.PprofEnable {
+				mux.HandleFunc("/debug/pprof/", pprof.Index)
+				mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+				mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+				mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+				mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+			}
+
+			if flags.StatsVizEnable {
+				if err := statsviz.Register(mux); err != nil {
+					logger.Err(err).Msg("statsviz register error")
+				}
+			}
+
 			mux.HandleFunc("/load/status", lg.StatusHandler)
 			mux.HandleFunc("/load/abort", lg.AbortHandler)
 			mux.HandleFunc("/load/cpu", lg.CPULoadHandler)
@@ -572,9 +595,16 @@ func main() {
 				}
 			})
 
+			wrappedMux := loggingMiddleware(disableCachingMiddleware(mux))
 			server := &http.Server{
-				Addr:    flags.WebListen,
-				Handler: loggingMiddleware(disableCachingMiddleware(mux)),
+				Addr: flags.WebListen,
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasPrefix(r.URL.Path, "/debug/") {
+						mux.ServeHTTP(w, r)
+					} else {
+						wrappedMux.ServeHTTP(w, r)
+					}
+				}),
 			}
 
 			mux.HandleFunc("/killhttp", func(w http.ResponseWriter, r *http.Request) {
