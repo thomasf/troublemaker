@@ -28,7 +28,6 @@ type StatusStep struct {
 // SlowStep defines one phase of a slow response pattern simulation.
 type SlowStep struct {
 	ResponseDuration time.Duration
-	RequestInterval  time.Duration
 	StepDuration     time.Duration
 }
 
@@ -74,55 +73,60 @@ var statusPlans = map[string][]StatusStep{
 
 var slowPlans = map[string][]SlowStep{
 	"steady": {
-		{ResponseDuration: 10 * time.Second, RequestInterval: 5 * time.Second, StepDuration: 20 * time.Minute},
+		{ResponseDuration: 10 * time.Second, StepDuration: 20 * time.Minute},
 	},
 	"increasing": {
-		{ResponseDuration: 500 * time.Millisecond, RequestInterval: 2 * time.Second, StepDuration: 5 * time.Minute},
-		{ResponseDuration: 5 * time.Second, RequestInterval: 3 * time.Second, StepDuration: 5 * time.Minute},
-		{ResponseDuration: 15 * time.Second, RequestInterval: 5 * time.Second, StepDuration: 5 * time.Minute},
-		{ResponseDuration: 30 * time.Second, RequestInterval: 10 * time.Second, StepDuration: 5 * time.Minute},
-		{ResponseDuration: 60 * time.Second, RequestInterval: 15 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 500 * time.Millisecond, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 5 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 15 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 30 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 60 * time.Second, StepDuration: 5 * time.Minute},
 	},
 	"spike": {
-		{ResponseDuration: 1 * time.Second, RequestInterval: 2 * time.Second, StepDuration: 5 * time.Minute},
-		{ResponseDuration: 45 * time.Second, RequestInterval: 10 * time.Second, StepDuration: 2 * time.Minute},
-		{ResponseDuration: 1 * time.Second, RequestInterval: 2 * time.Second, StepDuration: 5 * time.Minute},
-		{ResponseDuration: 90 * time.Second, RequestInterval: 15 * time.Second, StepDuration: 90 * time.Second},
-		{ResponseDuration: 1 * time.Second, RequestInterval: 2 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 1 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 45 * time.Second, StepDuration: 2 * time.Minute},
+		{ResponseDuration: 1 * time.Second, StepDuration: 5 * time.Minute},
+		{ResponseDuration: 90 * time.Second, StepDuration: 90 * time.Second},
+		{ResponseDuration: 1 * time.Second, StepDuration: 5 * time.Minute},
 	},
 	"sawtooth": {
-		{ResponseDuration: 5 * time.Second, RequestInterval: 3 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 10 * time.Second, RequestInterval: 4 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 20 * time.Second, RequestInterval: 5 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 40 * time.Second, RequestInterval: 8 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 5 * time.Second, RequestInterval: 3 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 10 * time.Second, RequestInterval: 4 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 20 * time.Second, RequestInterval: 5 * time.Second, StepDuration: 3 * time.Minute},
-		{ResponseDuration: 40 * time.Second, RequestInterval: 8 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 5 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 10 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 20 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 40 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 5 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 10 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 20 * time.Second, StepDuration: 3 * time.Minute},
+		{ResponseDuration: 40 * time.Second, StepDuration: 3 * time.Minute},
 	},
 }
 
 func generateChaosStatus() []StatusStep {
 	r := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0))
-	allCodeSets := [][]int{
-		{200},
-		{200, 200, 200, 500},
-		{200, 200, 500, 500},
-		{200, 500, 503},
-		{500, 503},
-		{200, 200, 200, 200, 429},
-		{200, 200, 200, 502},
-		{200, 404},
+	// Common HTTP status codes to pick from randomly
+	allCodes := []int{
+		200, 200, 200, 200, 200, // weight success
+		400, 401, 403, 404, 408, 409, 429,
+		500, 502, 503, 504,
 	}
-	durations := []time.Duration{
-		time.Minute, 2 * time.Minute, 3 * time.Minute, 5 * time.Minute,
+	newStep := func() StatusStep {
+		n := r.IntN(4) + 1
+		codes := make([]int, n)
+		for i := range n {
+			codes[i] = allCodes[r.IntN(len(allCodes))]
+		}
+		return StatusStep{
+			Codes:    codes,
+			Duration: time.Duration(r.IntN(15)+1) * time.Second,
+		}
 	}
+
 	var steps []StatusStep
-	for range 12 {
-		steps = append(steps, StatusStep{
-			Codes:    allCodeSets[r.IntN(len(allCodeSets))],
-			Duration: durations[r.IntN(len(durations))],
-		})
+	var total time.Duration
+	for total < 10*time.Minute {
+		s := newStep()
+		steps = append(steps, s)
+		total += s.Duration
 	}
 	return steps
 }
@@ -133,9 +137,6 @@ func generateChaosSlow() []SlowStep {
 		500 * time.Millisecond, time.Second, 5 * time.Second,
 		10 * time.Second, 30 * time.Second, 60 * time.Second,
 	}
-	intervals := []time.Duration{
-		time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second,
-	}
 	stepDurations := []time.Duration{
 		2 * time.Minute, 3 * time.Minute, 5 * time.Minute,
 	}
@@ -143,7 +144,6 @@ func generateChaosSlow() []SlowStep {
 	for range 8 {
 		steps = append(steps, SlowStep{
 			ResponseDuration: respDurations[r.IntN(len(respDurations))],
-			RequestInterval:  intervals[r.IntN(len(intervals))],
 			StepDuration:     stepDurations[r.IntN(len(stepDurations))],
 		})
 	}
@@ -158,7 +158,7 @@ func codesToPath(codes []int) string {
 	return strings.Join(parts, ",")
 }
 
-func runStatus(ctx context.Context, baseURL, pattern string, interval time.Duration, concurrency int, progress bool) error {
+func runStatus(ctx context.Context, baseURL, pattern string, rate float64, maxConcurrency int, progress bool) error {
 	if baseURL == "" {
 		return fmt.Errorf("-url is required")
 	}
@@ -176,11 +176,16 @@ func runStatus(ctx context.Context, baseURL, pattern string, interval time.Durat
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	sem := make(chan struct{}, concurrency)
+	semSize := maxConcurrency
+	if semSize <= 0 {
+		semSize = 10000
+	}
+	sem := make(chan struct{}, semSize)
+	tickInterval := time.Duration(float64(time.Second) / rate)
 	t0 := time.Now()
 
-	fmt.Printf("status: pattern=%s steps=%d interval=%s concurrency=%d\n",
-		pattern, len(steps), interval, concurrency)
+	fmt.Printf("status: pattern=%s steps=%d rate=%.2f/s max-concurrency=%d\n",
+		pattern, len(steps), rate, semSize)
 
 	for i, step := range steps {
 		select {
@@ -194,10 +199,11 @@ func runStatus(ctx context.Context, baseURL, pattern string, interval time.Durat
 			time.Since(t0).Round(time.Second), i+1, len(steps), step.Codes, step.Duration)
 
 		stepCtx, stepCancel := context.WithTimeout(ctx, step.Duration)
-		tick := time.NewTicker(interval)
+		tick := time.NewTicker(tickInterval)
 
-		var success, fail, reqErrors atomic.Int64
+		var success, fail, reqErrors, skipped atomic.Int64
 		var wg sync.WaitGroup
+		stepStart := time.Now()
 
 	stepLoop:
 		for {
@@ -232,7 +238,7 @@ func runStatus(ctx context.Context, baseURL, pattern string, interval time.Durat
 						}
 					}()
 				default:
-					// concurrency limit reached, skip this tick
+					skipped.Add(1)
 				}
 			case <-stepCtx.Done():
 				break stepLoop
@@ -245,13 +251,16 @@ func runStatus(ctx context.Context, baseURL, pattern string, interval time.Durat
 		if progress {
 			fmt.Println()
 		}
-		fmt.Printf("  done: success=%d non-2xx=%d errors=%d\n",
-			success.Load(), fail.Load(), reqErrors.Load())
+		elapsed := time.Since(stepStart).Seconds()
+		sent := success.Load() + fail.Load()
+		actualRPS := float64(sent) / elapsed
+		fmt.Printf("  done: success=%d non-2xx=%d errors=%d skipped=%d actual-rps=%.2f\n",
+			success.Load(), fail.Load(), reqErrors.Load(), skipped.Load(), actualRPS)
 	}
 	return nil
 }
 
-func runSlow(ctx context.Context, baseURL, pattern string, concurrency int, progress bool) error {
+func runSlow(ctx context.Context, baseURL, pattern string, rate float64, maxConcurrency int, progress bool) error {
 	if baseURL == "" {
 		return fmt.Errorf("-url is required")
 	}
@@ -269,11 +278,16 @@ func runSlow(ctx context.Context, baseURL, pattern string, concurrency int, prog
 	}
 
 	// Semaphore shared across steps so in-flight requests from one step count
-	// against the concurrency limit of the next.
-	sem := make(chan struct{}, concurrency)
+	// against the limit of the next.
+	semSize := maxConcurrency
+	if semSize <= 0 {
+		semSize = 10000
+	}
+	sem := make(chan struct{}, semSize)
+	tickInterval := time.Duration(float64(time.Second) / rate)
 	t0 := time.Now()
 
-	fmt.Printf("slow: pattern=%s steps=%d concurrency=%d\n", pattern, len(steps), concurrency)
+	fmt.Printf("slow: pattern=%s steps=%d rate=%.2f/s max-concurrency=%d\n", pattern, len(steps), rate, semSize)
 
 	var wg sync.WaitGroup
 
@@ -284,17 +298,18 @@ func runSlow(ctx context.Context, baseURL, pattern string, concurrency int, prog
 		default:
 		}
 
-		fmt.Printf("[%s] step %d/%d response-duration=%s request-interval=%s step-duration=%s\n",
+		fmt.Printf("[%s] step %d/%d response-duration=%s step-duration=%s\n",
 			time.Since(t0).Round(time.Second), i+1, len(steps),
-			step.ResponseDuration, step.RequestInterval, step.StepDuration)
+			step.ResponseDuration, step.StepDuration)
 
 		endpoint := fmt.Sprintf("%s/slow?duration=%s&interval=1s", baseURL, step.ResponseDuration)
 		client := &http.Client{Timeout: step.ResponseDuration + 30*time.Second}
 
 		stepCtx, stepCancel := context.WithTimeout(ctx, step.StepDuration)
-		tick := time.NewTicker(step.RequestInterval)
+		tick := time.NewTicker(tickInterval)
 
-		var completed, reqErrors atomic.Int64
+		var completed, reqErrors, skipped atomic.Int64
+		stepStart := time.Now()
 
 	stepLoop:
 		for {
@@ -326,7 +341,7 @@ func runSlow(ctx context.Context, baseURL, pattern string, concurrency int, prog
 						completed.Add(1)
 					}()
 				default:
-					fmt.Printf("  concurrency limit reached, skipping tick\n")
+					skipped.Add(1)
 				}
 			case <-stepCtx.Done():
 				break stepLoop
@@ -338,7 +353,10 @@ func runSlow(ctx context.Context, baseURL, pattern string, concurrency int, prog
 		if progress {
 			fmt.Println()
 		}
-		fmt.Printf("  step ended: completed=%d errors=%d\n", completed.Load(), reqErrors.Load())
+		elapsed := time.Since(stepStart).Seconds()
+		actualRPS := float64(completed.Load()) / elapsed
+		fmt.Printf("  step ended: completed=%d errors=%d skipped=%d actual-rps=%.2f\n",
+			completed.Load(), reqErrors.Load(), skipped.Load(), actualRPS)
 	}
 
 	// Wait for all in-flight requests to drain.
@@ -362,8 +380,8 @@ func main() {
 
 	statusFS := flag.NewFlagSet("status", flag.ExitOnError)
 	statusPattern := statusFS.String("pattern", "chaos", "error pattern: normal, degraded, error-burst, flapping, progressive, chaos")
-	statusInterval := statusFS.Duration("interval", time.Second, "interval between requests")
-	statusConcurrency := statusFS.Int("concurrency", 1, "max concurrent requests")
+	statusRate := statusFS.Float64("rate", 1.0, "target requests per second")
+	statusMaxConcurrency := statusFS.Int("max-concurrency", 10, "max concurrent in-flight requests (0=unlimited)")
 
 	statusCmd := &ffcli.Command{
 		Name:       "status",
@@ -371,13 +389,14 @@ func main() {
 		ShortHelp:  "simulate HTTP error patterns using the /status endpoint",
 		FlagSet:    statusFS,
 		Exec: func(ctx context.Context, args []string) error {
-			return runStatus(ctx, *rootURL, *statusPattern, *statusInterval, *statusConcurrency, *rootProgress)
+			return runStatus(ctx, *rootURL, *statusPattern, *statusRate, *statusMaxConcurrency, *rootProgress)
 		},
 	}
 
 	slowFS := flag.NewFlagSet("slow", flag.ExitOnError)
 	slowPattern := slowFS.String("pattern", "spike", "slow pattern: steady, increasing, spike, sawtooth, chaos")
-	slowConcurrency := slowFS.Int("concurrency", 3, "max concurrent requests")
+	slowRate := slowFS.Float64("rate", 0.5, "target requests per second")
+	slowMaxConcurrency := slowFS.Int("max-concurrency", 50, "max concurrent in-flight requests (0=unlimited)")
 
 	slowCmd := &ffcli.Command{
 		Name:       "slow",
@@ -385,7 +404,7 @@ func main() {
 		ShortHelp:  "simulate varying response durations using the /slow endpoint",
 		FlagSet:    slowFS,
 		Exec: func(ctx context.Context, args []string) error {
-			return runSlow(ctx, *rootURL, *slowPattern, *slowConcurrency, *rootProgress)
+			return runSlow(ctx, *rootURL, *slowPattern, *slowRate, *slowMaxConcurrency, *rootProgress)
 		},
 	}
 
