@@ -384,10 +384,25 @@ type EffectiveSettings struct {
 }
 
 func main() {
+
 	logger.Info().
 		Time("t0", startTime).
-		Strs("environment", os.Environ()).
 		Msg("started")
+
+	{
+		l := log.Info().Strs("environment", os.Environ())
+
+		envInfo := GetEnvInfo()
+		if envInfo != nil {
+			data, err := json.Marshal(&envInfo)
+			if err != nil {
+				log.Err(err).Msg("could not marshal envinfo")
+			}
+			l = l.RawJSON("envinfo", data)
+
+		}
+		l.Msg("env")
+	}
 
 	var flags Flags
 
