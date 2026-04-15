@@ -384,7 +384,11 @@ type EffectiveSettings struct {
 }
 
 func main() {
-	logger.Info().Time("t0", startTime).Msg("started")
+	logger.Info().
+		Time("t0", startTime).
+		Strs("environment", os.Environ()).
+		Msg("started")
+
 	var flags Flags
 
 	fs := flag.NewFlagSet("troublemaker", flag.ContinueOnError)
