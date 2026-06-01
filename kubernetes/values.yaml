@@ -53,6 +53,17 @@ config:
   # Random
   RAND_SEED: null  # seed for random generator (default random)
 
+  # S3 bucket connection. When any BUCKET_* key is set, troublemaker connects
+  # to the bucket at startup. Prefer sourcing the keys from a Secret via
+  # extraEnv rather than committing them here.
+  BUCKET_REGION: null             # s3 bucket region
+  BUCKET_ENDPOINT: null           # endpoint url for s3-compatible storage
+  BUCKET_ACCESS_KEY_ID: null      # static access key id
+  BUCKET_SECRET_ACCESS_KEY: null  # static secret access key
+  BUCKET_NAME: null               # bucket whose root is listed (required if any BUCKET_* set)
+  BUCKET_TIMEOUT: null            # startup connectivity check timeout (default "10s")
+  BUCKET_CRASH_ON_ERROR: null     # crash on startup if bucket unreachable (default "false")
+
 # Additional environment variables (raw env entries, e.g. valueFrom).
 extraEnv: []
   # - name: MY_VAR

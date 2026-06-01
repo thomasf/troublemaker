@@ -31,7 +31,7 @@ runs `go test -race ./...`, then builds and pushes a Docker image to `ghcr.io` o
 
 Two `package main` programs in one module:
 
-- **Server** (root: `main.go`, `load.go`, `logging.go`, `envinfo.go`) — the misbehaving service.
+- **Server** (root: `main.go`, `load.go`, `logging.go`, `envinfo.go`, `bucket.go`) — the misbehaving service.
 - **Client** (`cmd/troublemaker-client/main.go`) — a separate binary that hits a running
   server's `/status` and `/slow` endpoints following predefined or chaos patterns to simulate
   degradation over time. It is standalone and shares no code with the server.
@@ -87,6 +87,18 @@ exposed at `/logs`. Every request carries a process-wide `instance` id (`xid`) a
 
 Reads cgroup v2 (falling back to v1) memory/CPU limits from `/proc` and `/sys/fs/cgroup`,
 logged once at startup so container resource limits are visible in logs.
+
+### S3 bucket (`bucket.go`)
+
+When any `BUCKET_*` flag/env var is set (`bucketConfigured()`), `checkBucket` runs once at
+startup: it builds an aws-sdk-go-v2 S3 client (static creds from `BUCKET_ACCESS_KEY_ID` /
+`BUCKET_SECRET_ACCESS_KEY`, optional `BUCKET_ENDPOINT` with path-style addressing, falling
+back to the default AWS credential chain) and verifies connectivity by listing the bucket
+root via `ListObjectsV2` (delimiter `/`); `BUCKET_NAME` is required. With
+`BUCKET_CRASH_ON_ERROR=true` a failed check
+calls `logger.Fatal` to crash the process on startup. `BucketSecretAccessKey` is a
+`SecretString` whose `MarshalJSON` redacts it so it never leaks into `/info` or `/docs`
+(note: the startup "env" log still dumps the raw process environment).
 
 ## Deployment
 

@@ -194,6 +194,30 @@
     </div>
 
     <div class="endpoint">
+      <h2>S3 bucket connection</h2>
+      <div class="doc-section">
+        When any <code>BUCKET_*</code> setting is provided, troublemaker connects to
+        an S3 (or S3-compatible) bucket at startup using the aws-sdk-go-v2 and lists
+        the contents of the bucket root (<code>ListObjectsV2</code> with a
+        <code>/</code> delimiter); the top-level prefixes and objects are logged.
+        With <code>BUCKET_CRASH_ON_ERROR=true</code>
+        the process <strong>crashes on startup</strong> when the bucket cannot be
+        reached &mdash; useful for testing how infrastructure reacts to a service
+        that fails to start because a required dependency is unavailable.
+        <table class="params-table">
+          <tr><th>Env var / flag</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>BUCKET_REGION</code> / <code>-bucket.region</code></td><td>""</td><td>S3 bucket region.</td></tr>
+          <tr><td><code>BUCKET_ENDPOINT</code> / <code>-bucket.endpoint</code></td><td>""</td><td>Custom endpoint URL for S3-compatible storage (uses path-style addressing).</td></tr>
+          <tr><td><code>BUCKET_ACCESS_KEY_ID</code> / <code>-bucket.access.key.id</code></td><td>""</td><td>Static access key id. Falls back to the default AWS credential chain when empty.</td></tr>
+          <tr><td><code>BUCKET_SECRET_ACCESS_KEY</code> / <code>-bucket.secret.access.key</code></td><td>""</td><td>Static secret access key (redacted in flag output).</td></tr>
+          <tr><td><code>BUCKET_NAME</code> / <code>-bucket.name</code></td><td>""</td><td>Bucket whose root is listed. Required when any other BUCKET_* setting is provided.</td></tr>
+          <tr><td><code>BUCKET_TIMEOUT</code> / <code>-bucket.timeout</code></td><td>10s</td><td>Timeout for the startup connectivity check.</td></tr>
+          <tr><td><code>BUCKET_CRASH_ON_ERROR</code> / <code>-bucket.crash.on.error</code></td><td>false</td><td>Crash the program on startup if the bucket cannot be reached.</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="endpoint">
       <h2>Build Info &amp; Dependencies</h2>
       <div class="doc-section">
         <pre>{{.BuildInfo}}</pre>

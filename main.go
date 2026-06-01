@@ -328,6 +328,17 @@ type Flags struct {
 	PprofEnable bool `json:"pprof.enable"`
 
 	RandSeed uint64 `json:"rand.seed1"`
+
+	// S3 bucket settings. All use the BUCKET_ env-var prefix so it is clear
+	// they relate to the S3 bucket connection. When any is set, troublemaker
+	// attempts to connect to the bucket at startup.
+	BucketRegion          string        `json:"bucket.region"`
+	BucketEndpoint        string        `json:"bucket.endpoint"`
+	BucketAccessKeyID     string        `json:"bucket.access.key.id"`
+	BucketSecretAccessKey SecretString  `json:"bucket.secret.access.key"`
+	BucketName            string        `json:"bucket.name"`
+	BucketTimeout         time.Duration `json:"bucket.timeout"`
+	BucketCrashOnError    bool          `json:"bucket.crash.on.error"`
 }
 
 func (f *Flags) Register(fs *flag.FlagSet) {
@@ -356,6 +367,15 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.PprofEnable, "pprof.enable", false, "enable pprof at /debug/pprof/")
 
 	fs.Uint64Var(&f.RandSeed, "rand.seed", rand.Uint64(), "seed for random generator")
+
+	// S3 bucket settings (BUCKET_ env-var prefix).
+	fs.StringVar(&f.BucketRegion, "bucket.region", "", "s3 bucket region (BUCKET_REGION)")
+	fs.StringVar(&f.BucketEndpoint, "bucket.endpoint", "", "s3 endpoint url for s3-compatible storage (BUCKET_ENDPOINT)")
+	fs.StringVar(&f.BucketAccessKeyID, "bucket.access.key.id", "", "s3 access key id (BUCKET_ACCESS_KEY_ID)")
+	fs.Var(&f.BucketSecretAccessKey, "bucket.secret.access.key", "s3 secret access key (BUCKET_SECRET_ACCESS_KEY)")
+	fs.StringVar(&f.BucketName, "bucket.name", "", "s3 bucket name to verify with HeadBucket (BUCKET_NAME)")
+	fs.DurationVar(&f.BucketTimeout, "bucket.timeout", DefaultBucketTimeout, "timeout for the startup s3 connectivity check (BUCKET_TIMEOUT)")
+	fs.BoolVar(&f.BucketCrashOnError, "bucket.crash.on.error", false, "crash the program on startup if the s3 bucket cannot be reached (BUCKET_CRASH_ON_ERROR)")
 }
 
 func (f Flags) EffectiveSettings() EffectiveSettings {
@@ -414,7 +434,7 @@ func main() {
 		Msg("started")
 
 	{
-		l := log.Info().Strs("environment", os.Environ())
+		l := log.Info().Strs("environment", redactedEnviron(os.Environ()))
 
 		envInfo := GetEnvInfo()
 		if envInfo != nil {
@@ -456,6 +476,8 @@ func main() {
 
 	logger.Info().Interface("data", &flags).Msg("flags")
 	logger.Info().Interface("data", &effectiveSettings).Msg("effective settings")
+
+	checkBucket(flags, logger)
 
 	lg := NewLoadGenerator(logger)
 	lg.CPUMax = flags.LoadCPUMax

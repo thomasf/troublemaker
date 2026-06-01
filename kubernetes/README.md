@@ -54,6 +54,13 @@ Booleans and ints must be quoted as strings.
 | `LOG_SIZE` | `10000` | number of log lines to keep in memory |
 | `PPROF_ENABLE` | `false` | enable pprof at `/debug/pprof/` |
 | `RAND_SEED` | random | seed for random generator |
+| `BUCKET_REGION` | "" | s3 bucket region |
+| `BUCKET_ENDPOINT` | "" | endpoint url for s3-compatible storage |
+| `BUCKET_ACCESS_KEY_ID` | "" | static s3 access key id |
+| `BUCKET_SECRET_ACCESS_KEY` | "" | static s3 secret access key |
+| `BUCKET_NAME` | "" | bucket whose root is listed (required if any `BUCKET_*` is set) |
+| `BUCKET_TIMEOUT` | `10s` | startup connectivity check timeout |
+| `BUCKET_CRASH_ON_ERROR` | `false` | crash on startup if the bucket cannot be reached |
 
 See `values.yaml` for the full list of chart values (image, resources, probes,
 ingress, scheduling, security context, etc.).
