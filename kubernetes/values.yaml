@@ -1,0 +1,152 @@
+# Default values for troublemaker.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/thomasf/troublemaker
+  # The 0.1 tag is a floating minor-version tag, so always re-pull to pick up
+  # the latest 0.1.x patch.
+  pullPolicy: Always
+  tag: "0.1"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Extra arguments appended to the container command. The entrypoint is the
+# troublemaker binary; args may include subcommands such as
+# ["sleep", "30s"], ["beat"], or ["aldryn-celery"].
+args: []
+
+# troublemaker configuration. Each key below is passed to the container as an
+# environment variable (troublemaker reads env vars with no prefix). Keys left
+# as null are omitted so the binary's built-in default applies. Durations use
+# Go syntax (e.g. "5m", "100ms", "1ns"). Booleans/ints must be strings.
+config:
+  # HTTP server
+  WEB_ENABLE: null        # enable http server (default true)
+  WEB_LISTEN: null        # bind addr (default "0.0.0.0:8092")
+  WEB_DELAY: null         # sleep before starting http server (default "0s")
+  WEB_DELAY_JITTER: null  # delay +/- jitter (default "0s")
+  WEB_ROOT: null          # handler to use for / (e.g. "status/200,404")
+
+  # Exit behavior
+  EXIT_AFTER: null         # exit after duration if >0, "1ns" = exit asap (default "0s")
+  EXIT_AFTER_JITTER: null  # exit.after +/- jitter (default "0s")
+  EXIT_PERCENT: null       # % chance to exit if exit.after is set (default "100")
+  EXIT_CODE: null          # exit code when exiting (default "1")
+
+  # Signals
+  SIGNALS_IGNORE: null  # ignore shutdown signals (default "false")
+
+  # Load generator
+  LOAD_ENABLE: null   # enable load generator at startup (default "false")
+  LOAD_TYPE: null     # cpu, mem, combined, sine, spike, random (default "random")
+  LOAD_CPU_MAX: null  # maximum cpu load in percent (default "85")
+  LOAD_MEM_MAX: null  # maximum memory load in MB (default "666")
+  LOAD_WAIT: null     # wait before starting load (default "0s")
+
+  # Logging / profiling
+  LOG_SIZE: null      # number of log lines to keep in memory (default "10000")
+  PPROF_ENABLE: null  # enable pprof at /debug/pprof/ (default "false")
+
+  # Random
+  RAND_SEED: null  # seed for random generator (default random)
+
+# Additional environment variables (raw env entries, e.g. valueFrom).
+extraEnv: []
+  # - name: MY_VAR
+  #   value: "value"
+  # - name: FROM_SECRET
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: my-secret
+  #       key: my-key
+
+service:
+  type: ClusterIP
+  port: 8092
+  # containerPort the troublemaker http server listens on. Keep in sync with
+  # config.WEB_LISTEN if you override it.
+  targetPort: 8092
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: troublemaker.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Pod scheduling priority. Set an existing PriorityClass name, and/or have the
+# chart create one.
+priorityClassName: ""
+priorityClass:
+  # Create a PriorityClass resource. When true, its name is used as
+  # priorityClassName unless priorityClassName is set explicitly.
+  create: false
+  name: ""
+  value: 0
+  globalDefault: false
+  preemptionPolicy: PreemptLowerPriority
+  description: "Priority class for troublemaker"
+
+resources: {}
+  # limits:
+  #   cpu: 1
+  #   memory: 768Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 64Mi
+
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 65532
+
+securityContext: {}
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 65532
+  # allowPrivilegeEscalation: false
+  # capabilities:
+  #   drop:
+  #     - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# Optional Deployment strategy override (e.g. type: Recreate).
+strategy: {}

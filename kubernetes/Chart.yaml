@@ -1,0 +1,14 @@
+apiVersion: v2
+name: troublemaker
+description: A Helm chart for troublemaker, a configurable fault/load injection HTTP server.
+type: application
+version: 0.1.0
+appVersion: "latest"
+home: https://github.com/thomasf/troublemaker
+sources:
+  - https://github.com/thomasf/troublemaker
+keywords:
+  - testing
+  - chaos
+  - load-testing
+  - fault-injection

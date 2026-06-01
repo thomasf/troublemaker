@@ -1,0 +1,14 @@
+{{- if .Values.priorityClass.create }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ default (include "troublemaker.fullname" .) .Values.priorityClass.name }}
+  labels:
+    {{- include "troublemaker.labels" . | nindent 4 }}
+value: {{ .Values.priorityClass.value }}
+globalDefault: {{ .Values.priorityClass.globalDefault }}
+{{- with .Values.priorityClass.preemptionPolicy }}
+preemptionPolicy: {{ . }}
+{{- end }}
+description: {{ .Values.priorityClass.description | quote }}
+{{- end }}

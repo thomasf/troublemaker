@@ -1,0 +1,24 @@
+troublemaker has been deployed.
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Image:     {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+{{- $priorityClassName := include "troublemaker.priorityClassName" . }}
+{{- if $priorityClassName }}
+Priority:  {{ $priorityClassName }}
+{{- end }}
+
+Reach the HTTP server:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.type "ClusterIP" }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "troublemaker.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  # then open http://127.0.0.1:{{ .Values.service.port }}/docs
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} get svc {{ include "troublemaker.fullname" . }}
+{{- end }}
+
+Browse /docs on the server for the full list of fault/load endpoints.
