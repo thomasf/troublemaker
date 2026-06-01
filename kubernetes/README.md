@@ -47,7 +47,7 @@ Booleans and ints must be quoted as strings.
 | `EXIT_CODE` | `1` | exit code when exiting |
 | `SIGNALS_IGNORE` | `false` | ignore shutdown signals |
 | `LOAD_ENABLE` | `false` | enable load generator at startup |
-| `LOAD_TYPE` | `random` | `cpu`, `mem`, `combined`, `sine`, `spike`, `random` |
+| `LOAD_TYPE` | `random` | `cpu`, `mem`, `combined`, `sine`, `spike`, `static`, `random` |
 | `LOAD_CPU_MAX` | `85` | maximum cpu load in percent |
 | `LOAD_MEM_MAX` | `666` | maximum memory load in MB |
 | `LOAD_WAIT` | `0s` | wait before starting load |

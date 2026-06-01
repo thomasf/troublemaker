@@ -41,7 +41,7 @@ config:
 
   # Load generator
   LOAD_ENABLE: null   # enable load generator at startup (default "false")
-  LOAD_TYPE: null     # cpu, mem, combined, sine, spike, random (default "random")
+  LOAD_TYPE: null     # cpu, mem, combined, sine, spike, static, random (default "random")
   LOAD_CPU_MAX: null  # maximum cpu load in percent (default "85")
   LOAD_MEM_MAX: null  # maximum memory load in MB (default "666")
   LOAD_WAIT: null     # wait before starting load (default "0s")

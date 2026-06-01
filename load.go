@@ -108,6 +108,10 @@ func (lg *LoadGenerator) StartSpikeLoad() {
 	lg.guard(lg.doStartSpikeLoad)
 }
 
+func (lg *LoadGenerator) StartStaticLoad() {
+	lg.guard(lg.doStartStaticLoad)
+}
+
 func (lg *LoadGenerator) guard(fn func(ctx context.Context)) bool {
 	if !lg.isRunning.CompareAndSwap(0, 1) {
 		lg.logger.Warn().Msg("a load generator is already running, skipping")
@@ -142,6 +146,15 @@ func (lg *LoadGenerator) runLoadSteps(ctx context.Context, steps []LoadStep) {
 	lg.mu.Unlock()
 
 	var data []byte
+
+	// Always release any allocated memory back to the OS when the schedule
+	// ends, including when it is aborted mid-step via context cancellation.
+	defer func() {
+		data = nil
+		runtime.GC()
+		debug.FreeOSMemory()
+	}()
+
 	t0 := time.Now()
 	for i, step := range steps {
 		select {
@@ -466,6 +479,23 @@ func (lg *LoadGenerator) doStartSpikeLoad(ctx context.Context) {
 	lg.runLoadSteps(ctx, steps)
 }
 
+func (lg *LoadGenerator) doStartStaticLoad(ctx context.Context) {
+	testID := xid.New()
+	logger := lg.logger.With().Str("staticload.id", testID.String()).Logger()
+	logger.Info().Msg("static load test starts")
+	defer logger.Info().Msg("static load test ended")
+
+	// A single step at CPUMax/MemMax that effectively never ends; it runs
+	// until the context is cancelled via Abort().
+	const forever = 100 * 365 * 24 * time.Hour
+
+	steps := []LoadStep{
+		{Duration: forever, CPUPercent: lg.CPUMax, MemMB: lg.MemMax},
+	}
+
+	lg.runLoadSteps(ctx, steps)
+}
+
 func (lg *LoadGenerator) doBusyWork(ctx context.Context, duration time.Duration, percentage int) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -562,6 +592,11 @@ func (lg *LoadGenerator) SineLoadHandler(w http.ResponseWriter, r *http.Request)
 func (lg *LoadGenerator) SpikeLoadHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	go lg.StartSpikeLoad()
+}
+
+func (lg *LoadGenerator) StaticLoadHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	go lg.StartStaticLoad()
 }
 
 func (lg *LoadGenerator) RandomLoadHandler(w http.ResponseWriter, r *http.Request) {

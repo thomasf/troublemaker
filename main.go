@@ -370,7 +370,7 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.IgnoreSignals, "signals.ignore", false, "ignore shutdown signals")
 
 	fs.BoolVar(&f.LoadEnable, "load.enable", false, "enable load generator at startup")
-	fs.StringVar(&f.LoadType, "load.type", "random", "type of load to generate (cpu, mem, combined, sine, spike, random)")
+	fs.StringVar(&f.LoadType, "load.type", "random", "type of load to generate (cpu, mem, combined, sine, spike, static, random)")
 	fs.IntVar(&f.LoadCPUMax, "load.cpu.max", 85, "maximum cpu load in percent")
 	fs.IntVar(&f.LoadMemMax, "load.mem.max", 666, "maximum memory load in MB")
 	fs.DurationVar(&f.LoadWait, "load.wait", 0, "wait duration before starting load")
@@ -579,6 +579,7 @@ func main() {
 			mux.HandleFunc("/load/combined", lg.CombinedLoadHandler)
 			mux.HandleFunc("/load/sine", lg.SineLoadHandler)
 			mux.HandleFunc("/load/spike", lg.SpikeLoadHandler)
+			mux.HandleFunc("/load/static", lg.StaticLoadHandler)
 			mux.HandleFunc("/load/random", lg.RandomLoadHandler)
 			mux.HandleFunc("/load/seed/", lg.SeedLoadHandler)
 			mux.HandleFunc("/exit/", func(w http.ResponseWriter, r *http.Request) {
@@ -707,6 +708,9 @@ func main() {
 			case "spike":
 				logger.Info().Msg("starting spike load")
 				lg.StartSpikeLoad()
+			case "static":
+				logger.Info().Msg("starting static load")
+				lg.StartStaticLoad()
 			case "random":
 				logger.Info().Msg("starting random load")
 				lg.StartSchedule(flags.RandSeed, 0, "cpu,mem")
