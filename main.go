@@ -385,25 +385,6 @@ type EffectiveSettings struct {
 
 func main() {
 
-	logger.Info().
-		Time("t0", startTime).
-		Msg("started")
-
-	{
-		l := log.Info().Strs("environment", os.Environ())
-
-		envInfo := GetEnvInfo()
-		if envInfo != nil {
-			data, err := json.Marshal(&envInfo)
-			if err != nil {
-				log.Err(err).Msg("could not marshal envinfo")
-			}
-			l = l.RawJSON("envinfo", data)
-
-		}
-		l.Msg("env")
-	}
-
 	var flags Flags
 
 	fs := flag.NewFlagSet("troublemaker", flag.ContinueOnError)
@@ -426,6 +407,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 
+	}
+
+	logger.Info().
+		Time("t0", startTime).
+		Msg("started")
+
+	{
+		l := log.Info().Strs("environment", os.Environ())
+
+		envInfo := GetEnvInfo()
+		if envInfo != nil {
+			data, err := json.Marshal(&envInfo)
+			if err != nil {
+				log.Err(err).Msg("could not marshal envinfo")
+			}
+			l = l.RawJSON("envinfo", data)
+
+		}
+		l.Msg("env")
 	}
 
 	logBuffer.mu.Lock()
