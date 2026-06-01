@@ -16,8 +16,9 @@ import (
 // redactedEnviron returns os.Environ()-style entries with the values of secret
 // variables masked, so they never reach public-facing output such as the
 // startup "env" log line (which is exposed via /logs). Any variable whose name
-// contains SECRET, TOKEN or PASSWORD is redacted — this covers
-// BUCKET_SECRET_ACCESS_KEY as well as AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN.
+// contains SECRET, TOKEN, PASSWORD or DSN is redacted — this covers
+// BUCKET_SECRET_ACCESS_KEY and AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN as
+// well as POSTGRES_DSN (whose connection string may embed a password).
 func redactedEnviron(environ []string) []string {
 	out := make([]string, len(environ))
 	for i, kv := range environ {
@@ -25,7 +26,8 @@ func redactedEnviron(environ []string) []string {
 		upper := strings.ToUpper(name)
 		if ok && (strings.Contains(upper, "SECRET") ||
 			strings.Contains(upper, "TOKEN") ||
-			strings.Contains(upper, "PASSWORD")) {
+			strings.Contains(upper, "PASSWORD") ||
+			strings.Contains(upper, "DSN")) {
 			out[i] = name + "=***redacted***"
 			continue
 		}

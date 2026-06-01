@@ -31,7 +31,7 @@ runs `go test -race ./...`, then builds and pushes a Docker image to `ghcr.io` o
 
 Two `package main` programs in one module:
 
-- **Server** (root: `main.go`, `load.go`, `logging.go`, `envinfo.go`, `bucket.go`) — the misbehaving service.
+- **Server** (root: `main.go`, `load.go`, `logging.go`, `envinfo.go`, `bucket.go`, `postgres.go`) — the misbehaving service.
 - **Client** (`cmd/troublemaker-client/main.go`) — a separate binary that hits a running
   server's `/status` and `/slow` endpoints following predefined or chaos patterns to simulate
   degradation over time. It is standalone and shares no code with the server.
@@ -99,6 +99,19 @@ root via `ListObjectsV2` (delimiter `/`); `BUCKET_NAME` is required. With
 calls `logger.Fatal` to crash the process on startup. `BucketSecretAccessKey` is a
 `SecretString` whose `MarshalJSON` redacts it so it never leaks into `/info` or `/docs`
 (note: the startup "env" log still dumps the raw process environment).
+
+### PostgreSQL (`postgres.go`)
+
+When `POSTGRES_DSN` or any individual `POSTGRES_*` connection setting is provided
+(`postgresConfigured()`), `checkPostgres` runs once at startup. `postgresConfig()` parses the
+DSN with `pgx.ParseConfig` (accepting both `postgres://` URL and libpq keyword/value forms) as
+a base, then the individual settings (`POSTGRES_HOST`/`PORT`/`USER`/`PASSWORD`/`DBNAME`/`SSLMODE`)
+override the corresponding parts of the DSN — so either input style works alone or together.
+It then connects via `pgx.ConnectConfig` and verifies connectivity by running `select version()`;
+the parsed host/port/user/dbname and the server version are logged (never the raw DSN or
+password). With `POSTGRES_CRASH_ON_ERROR=true` a failed check calls `logger.Fatal` to crash the
+process on startup. `PostgresDSN` and `PostgresPassword` are `SecretString`s so they are redacted
+in `/info` and `/docs`, and `redactedEnviron` also masks any env var whose name contains `DSN`.
 
 ## Deployment
 

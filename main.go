@@ -339,6 +339,19 @@ type Flags struct {
 	BucketName            string        `json:"bucket.name"`
 	BucketTimeout         time.Duration `json:"bucket.timeout"`
 	BucketCrashOnError    bool          `json:"bucket.crash.on.error"`
+
+	// PostgreSQL settings. All use the POSTGRES_ env-var prefix. When the DSN
+	// or any individual setting is provided, troublemaker attempts to connect
+	// to the database at startup. Individual settings override the DSN.
+	PostgresDSN          SecretString  `json:"postgres.dsn"`
+	PostgresHost         string        `json:"postgres.host"`
+	PostgresPort         string        `json:"postgres.port"`
+	PostgresUser         string        `json:"postgres.user"`
+	PostgresPassword     SecretString  `json:"postgres.password"`
+	PostgresDBName       string        `json:"postgres.dbname"`
+	PostgresSSLMode      string        `json:"postgres.sslmode"`
+	PostgresTimeout      time.Duration `json:"postgres.timeout"`
+	PostgresCrashOnError bool          `json:"postgres.crash.on.error"`
 }
 
 func (f *Flags) Register(fs *flag.FlagSet) {
@@ -376,6 +389,18 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.StringVar(&f.BucketName, "bucket.name", "", "s3 bucket name to verify with HeadBucket (BUCKET_NAME)")
 	fs.DurationVar(&f.BucketTimeout, "bucket.timeout", DefaultBucketTimeout, "timeout for the startup s3 connectivity check (BUCKET_TIMEOUT)")
 	fs.BoolVar(&f.BucketCrashOnError, "bucket.crash.on.error", false, "crash the program on startup if the s3 bucket cannot be reached (BUCKET_CRASH_ON_ERROR)")
+
+	// PostgreSQL settings (POSTGRES_ env-var prefix). The DSN is the base;
+	// individual settings override the corresponding part of the DSN.
+	fs.Var(&f.PostgresDSN, "postgres.dsn", "postgresql connection string, url or keyword/value form (POSTGRES_DSN)")
+	fs.StringVar(&f.PostgresHost, "postgres.host", "", "postgresql host, overrides the dsn (POSTGRES_HOST)")
+	fs.StringVar(&f.PostgresPort, "postgres.port", "", "postgresql port, overrides the dsn (POSTGRES_PORT)")
+	fs.StringVar(&f.PostgresUser, "postgres.user", "", "postgresql user, overrides the dsn (POSTGRES_USER)")
+	fs.Var(&f.PostgresPassword, "postgres.password", "postgresql password, overrides the dsn (POSTGRES_PASSWORD)")
+	fs.StringVar(&f.PostgresDBName, "postgres.dbname", "", "postgresql database name, overrides the dsn (POSTGRES_DBNAME)")
+	fs.StringVar(&f.PostgresSSLMode, "postgres.sslmode", "", "postgresql sslmode (disable, require, verify-ca, verify-full), overrides the dsn (POSTGRES_SSLMODE)")
+	fs.DurationVar(&f.PostgresTimeout, "postgres.timeout", DefaultPostgresTimeout, "timeout for the startup postgresql connectivity check (POSTGRES_TIMEOUT)")
+	fs.BoolVar(&f.PostgresCrashOnError, "postgres.crash.on.error", false, "crash the program on startup if postgresql cannot be reached (POSTGRES_CRASH_ON_ERROR)")
 }
 
 func (f Flags) EffectiveSettings() EffectiveSettings {
@@ -478,6 +503,7 @@ func main() {
 	logger.Info().Interface("data", &effectiveSettings).Msg("effective settings")
 
 	checkBucket(flags, logger)
+	checkPostgres(flags, logger)
 
 	lg := NewLoadGenerator(logger)
 	lg.CPUMax = flags.LoadCPUMax

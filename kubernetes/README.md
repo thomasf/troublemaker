@@ -61,6 +61,15 @@ Booleans and ints must be quoted as strings.
 | `BUCKET_NAME` | "" | bucket whose root is listed (required if any `BUCKET_*` is set) |
 | `BUCKET_TIMEOUT` | `10s` | startup connectivity check timeout |
 | `BUCKET_CRASH_ON_ERROR` | `false` | crash on startup if the bucket cannot be reached |
+| `POSTGRES_DSN` | "" | postgresql connection string (url or keyword/value form) |
+| `POSTGRES_HOST` | "" | postgresql host, overrides the dsn |
+| `POSTGRES_PORT` | "" | postgresql port, overrides the dsn |
+| `POSTGRES_USER` | "" | postgresql user, overrides the dsn |
+| `POSTGRES_PASSWORD` | "" | postgresql password, overrides the dsn |
+| `POSTGRES_DBNAME` | "" | postgresql database name, overrides the dsn |
+| `POSTGRES_SSLMODE` | "" | postgresql sslmode (disable, require, verify-ca, verify-full) |
+| `POSTGRES_TIMEOUT` | `10s` | startup connectivity check timeout |
+| `POSTGRES_CRASH_ON_ERROR` | `false` | crash on startup if the database cannot be reached |
 
 See `values.yaml` for the full list of chart values (image, resources, probes,
 ingress, scheduling, security context, etc.).

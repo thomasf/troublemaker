@@ -64,6 +64,20 @@ config:
   BUCKET_TIMEOUT: null            # startup connectivity check timeout (default "10s")
   BUCKET_CRASH_ON_ERROR: null     # crash on startup if bucket unreachable (default "false")
 
+  # PostgreSQL connection. When POSTGRES_DSN or any individual POSTGRES_* key
+  # is set, troublemaker connects to the database at startup. Individual keys
+  # override the corresponding part of the DSN. Prefer sourcing the DSN or
+  # password from a Secret via extraEnv rather than committing them here.
+  POSTGRES_DSN: null              # connection string (url or keyword/value form)
+  POSTGRES_HOST: null             # host, overrides the dsn
+  POSTGRES_PORT: null             # port, overrides the dsn
+  POSTGRES_USER: null             # user, overrides the dsn
+  POSTGRES_PASSWORD: null         # password, overrides the dsn
+  POSTGRES_DBNAME: null           # database name, overrides the dsn
+  POSTGRES_SSLMODE: null          # sslmode: disable, require, verify-ca, verify-full
+  POSTGRES_TIMEOUT: null          # startup connectivity check timeout (default "10s")
+  POSTGRES_CRASH_ON_ERROR: null   # crash on startup if database unreachable (default "false")
+
 # Additional environment variables (raw env entries, e.g. valueFrom).
 extraEnv: []
   # - name: MY_VAR
