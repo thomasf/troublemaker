@@ -47,7 +47,7 @@ config:
   LOAD_WAIT: null     # wait before starting load (default "0s")
 
   # Logging / profiling
-  LOG_SIZE: null      # number of log lines to keep in memory (default "10000")
+  LOG_SIZE: null      # number of log lines to keep in memory, 0 = disabled (default "0")
   PPROF_ENABLE: null  # enable pprof at /debug/pprof/ (default "false")
 
   # Random

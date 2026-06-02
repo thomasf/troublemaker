@@ -51,7 +51,7 @@ Booleans and ints must be quoted as strings.
 | `LOAD_CPU_MAX` | `85` | maximum cpu load in percent |
 | `LOAD_MEM_MAX` | `666` | maximum memory load in MB |
 | `LOAD_WAIT` | `0s` | wait before starting load |
-| `LOG_SIZE` | `10000` | number of log lines to keep in memory |
+| `LOG_SIZE` | `0` | number of log lines to keep in memory (0 = disabled) |
 | `PPROF_ENABLE` | `false` | enable pprof at `/debug/pprof/` |
 | `RAND_SEED` | random | seed for random generator |
 | `BUCKET_REGION` | "" | s3 bucket region |

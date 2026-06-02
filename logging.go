@@ -75,6 +75,13 @@ func init() {
 
 func newLogsHandler() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logBuffer.mu.RLock()
+		size := logBuffer.size
+		logBuffer.mu.RUnlock()
+		if size <= 0 {
+			http.Error(w, "in-memory log buffer disabled (set log.size > 0 to enable)", http.StatusNotFound)
+			return
+		}
 		w.Header().Add("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		logBuffer.WriteTo(w)

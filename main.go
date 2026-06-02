@@ -375,7 +375,7 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.IntVar(&f.LoadMemMax, "load.mem.max", 666, "maximum memory load in MB")
 	fs.DurationVar(&f.LoadWait, "load.wait", 0, "wait duration before starting load")
 
-	fs.IntVar(&f.LogSize, "log.size", 10000, "number of log lines to keep in memory")
+	fs.IntVar(&f.LogSize, "log.size", 0, "number of log lines to keep in memory (0 = disabled)")
 
 	fs.BoolVar(&f.PprofEnable, "pprof.enable", false, "enable pprof at /debug/pprof/")
 
