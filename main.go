@@ -16,7 +16,9 @@ import (
 	"os/signal"
 	"path"
 	"runtime"
+	"maps"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,8 +80,10 @@ func newSetHeadersHandler() http.Handler {
 		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
 		fmt.Fprintf(w, "Time: %s\n", time.Now().Format(time.RFC3339Nano))
 		fmt.Fprintln(w, "\nResponse Headers:")
-		for k, v := range w.Header() {
-			fmt.Fprintf(w, "%s: %s\n", k, strings.Join(v, ", "))
+		headers := w.Header()
+		keys := slices.Sorted(maps.Keys(headers))
+		for _, k := range keys {
+			fmt.Fprintf(w, "%s: %s\n", k, strings.Join(headers[k], ", "))
 		}
 	})
 }
@@ -118,8 +122,10 @@ func newCacheHandler() http.Handler {
 		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
 		fmt.Fprintf(w, "Time: %s\n", time.Now().Format(time.RFC3339Nano))
 		fmt.Fprintln(w, "\nResponse Headers:")
-		for k, v := range w.Header() {
-			fmt.Fprintf(w, "%s: %s\n", k, strings.Join(v, ", "))
+		headers := w.Header()
+		keys := slices.Sorted(maps.Keys(headers))
+		for _, k := range keys {
+			fmt.Fprintf(w, "%s: %s\n", k, strings.Join(headers[k], ", "))
 		}
 	})
 }
