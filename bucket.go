@@ -144,6 +144,9 @@ func connectBucket(ctx context.Context, flags Flags, logger zerolog.Logger) erro
 // unavailable.
 func checkBucket(flags Flags, logger zerolog.Logger) {
 	if !flags.bucketConfigured() {
+		if flags.BucketCrashOnError {
+			logger.Fatal().Msg("crashing on startup: bucket.crash.on.error is set but no BUCKET_* credentials are configured")
+		}
 		return
 	}
 

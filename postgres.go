@@ -120,6 +120,9 @@ func connectPostgres(ctx context.Context, flags Flags, logger zerolog.Logger) er
 // is unavailable.
 func checkPostgres(flags Flags, logger zerolog.Logger) {
 	if !flags.postgresConfigured() {
+		if flags.PostgresCrashOnError {
+			logger.Fatal().Msg("crashing on startup: postgres.crash.on.error is set but no POSTGRES_* credentials are configured")
+		}
 		return
 	}
 
